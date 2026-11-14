@@ -1,0 +1,794 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<style>:root{padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px)}body{margin:0}img{max-width:100%}[hidden]{display:none!important}</style>
+<title>급수설비 계통 따라가기</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@500;600&family=IBM+Plex+Sans+KR:wght@400;500;700&display=swap">
+<style>
+/* layout: 급수 구간 띠 → [3D 단지 모형 | 설비 설명 패널] → 급수 계통도 → 점검 주기표 → 약어 */
+:root{
+  --bg:#eaeef0; --surface:#f6f9fa; --raise:#ffffff; --ink:#18242a; --muted:#53626a; --line:#ccd6da;
+  --city:#0b8796; --pump:#1d5fc4; --drain:#7b5aa6; --ctrl:#c06d0a; --warn:#c3342a; --focus:#0a7bbd;
+  --scene-bg:#d9e3e6; --scene-ground:#c3cdc6; --scene-line:#62747a;
+  --f-sans:"IBM Plex Sans KR","Apple SD Gothic Neo","Malgun Gothic",system-ui,sans-serif;
+  --f-mono:"IBM Plex Mono",ui-monospace,Menlo,Consolas,monospace;
+}
+@media (prefers-color-scheme: dark){:root:not([data-theme="light"]){
+  --bg:#0f161a; --surface:#152027; --raise:#1b2830; --ink:#e3ecef; --muted:#97a8ae; --line:#283840;
+  --city:#3fc7d6; --pump:#6ea8ff; --drain:#b99be3; --ctrl:#f0a945; --warn:#ff6b5c; --focus:#5cc0ff;
+  --scene-bg:#121c21; --scene-ground:#1d2a2e; --scene-line:#7d9198; color-scheme:dark}}
+:root[data-theme="dark"]{
+  --bg:#0f161a; --surface:#152027; --raise:#1b2830; --ink:#e3ecef; --muted:#97a8ae; --line:#283840;
+  --city:#3fc7d6; --pump:#6ea8ff; --drain:#b99be3; --ctrl:#f0a945; --warn:#ff6b5c; --focus:#5cc0ff;
+  --scene-bg:#121c21; --scene-ground:#1d2a2e; --scene-line:#7d9198; color-scheme:dark}
+
+*{box-sizing:border-box}
+[hidden]{display:none!important}
+body{background:var(--bg);color:var(--ink);font-family:var(--f-sans);font-size:15px;line-height:1.6;
+  padding-left:max(16px,env(safe-area-inset-left,0px));padding-right:max(16px,env(safe-area-inset-right,0px));padding-block:20px 48px}
+.wrap{max-width:1360px;margin:0 auto;display:flex;flex-direction:column;gap:28px}
+h1,h2,h3{text-wrap:balance;margin:0;line-height:1.3}
+h1{font-size:clamp(22px,3vw,30px);font-weight:700;letter-spacing:-.01em}
+h2{font-size:19px;font-weight:700}
+.mono{font-family:var(--f-mono)}
+button{font:inherit;color:inherit}
+:focus-visible{outline:2px solid var(--focus);outline-offset:2px}
+
+header{display:flex;flex-direction:column;gap:14px}
+.lede{color:var(--muted);margin:0;max-width:68ch}
+.band{display:grid;grid-template-columns:1.1fr 1.4fr 1.4fr .9fr;border:1px solid var(--line);border-radius:6px;overflow:hidden;font-size:13px}
+.band div{padding:8px 12px;display:flex;flex-direction:column;gap:1px;border-right:1px solid var(--line);background:var(--surface);transition:background .3s;min-width:0}
+.band div:last-child{border-right:0}
+.band b{font-weight:600}
+.band span{font-family:var(--f-mono);font-size:12px;color:var(--muted)}
+.band div[data-z="city"].on{background:color-mix(in srgb,var(--city) 16%,var(--surface))}
+.band div[data-z="plant"].on{background:color-mix(in srgb,var(--city) 10%,color-mix(in srgb,var(--pump) 10%,var(--surface)))}
+.band div[data-z="pipe"].on{background:color-mix(in srgb,var(--pump) 16%,var(--surface))}
+.band div[data-z="home"].on{background:color-mix(in srgb,var(--pump) 11%,var(--surface))}
+.band div.on b{color:var(--ink)}
+.band div::before{content:"";display:block;height:3px;border-radius:2px;margin-bottom:5px;background:var(--line)}
+.band div[data-z="city"]::before{background:var(--city)}
+.band div[data-z="plant"]::before{background:linear-gradient(90deg,var(--city),var(--pump))}
+.band div[data-z="pipe"]::before,.band div[data-z="home"]::before{background:var(--pump)}
+
+.stage{display:grid;grid-template-columns:minmax(0,1fr) 400px;gap:0;border:1px solid var(--line);border-radius:8px;overflow:hidden;background:var(--surface)}
+.view{position:relative;min-height:560px;height:min(76vh,720px);background:var(--scene-bg)}
+.view canvas{display:block;width:100%;height:100%;touch-action:none;cursor:grab}
+.view canvas:active{cursor:grabbing}
+.labels{position:absolute;inset:0;pointer-events:none;overflow:hidden}
+.tag{position:absolute;left:0;top:0;pointer-events:auto;transform:translate(-50%,-50%);display:flex;align-items:center;gap:5px;
+  border:1px solid var(--line);background:var(--raise);border-radius:999px;padding:2px 8px 2px 3px;font-size:12px;white-space:nowrap;cursor:pointer;
+  box-shadow:0 1px 3px rgb(0 0 0 / .12);transition:opacity .2s}
+.tag i{font-style:normal;font-family:var(--f-mono);font-weight:600;font-size:11px;width:19px;height:19px;border-radius:50%;display:grid;place-items:center;color:#fff;background:var(--c)}
+.tag em{font-style:normal;font-family:var(--f-mono);font-size:11px;color:var(--muted)}
+.tag.on{border-color:var(--c);z-index:5;font-weight:600}
+.tag.on em{color:var(--ink)}
+.tag.dim{opacity:.55}
+.tools{position:absolute;top:10px;left:10px;display:flex;gap:6px;flex-wrap:wrap}
+.tools button,.nav button{border:1px solid var(--line);background:var(--raise);border-radius:6px;padding:6px 11px;font-size:13px;cursor:pointer}
+.tools button:hover,.nav button:hover{border-color:var(--muted)}
+.tools button[aria-pressed="true"]{background:var(--ink);color:var(--bg);border-color:var(--ink)}
+.legend{position:absolute;bottom:10px;left:10px;right:10px;width:max-content;max-width:calc(100% - 20px);display:flex;gap:4px 12px;flex-wrap:wrap;font-size:12px;background:color-mix(in srgb,var(--raise) 88%,transparent);border:1px solid var(--line);border-radius:6px;padding:5px 10px}
+.legend span{display:flex;align-items:center;gap:5px}
+.legend span::before{content:"";width:14px;height:3px;border-radius:2px;background:var(--c)}
+.hint{position:absolute;bottom:10px;right:10px;font-size:12px;color:var(--muted);background:color-mix(in srgb,var(--raise) 88%,transparent);border-radius:6px;padding:4px 8px}
+.nogl{position:absolute;inset:0;display:grid;place-items:center;text-align:center;padding:24px;color:var(--muted)}
+
+.panel{border-left:1px solid var(--line);display:flex;flex-direction:column;min-height:0;height:min(76vh,720px);min-width:0}
+.ph{padding:16px 18px 12px;border-bottom:1px solid var(--line);display:flex;flex-direction:column;gap:8px}
+.ph .meta{display:flex;align-items:center;gap:8px;font-size:12px;color:var(--muted)}
+.pill{font-size:11.5px;font-weight:600;padding:1px 8px;border-radius:999px;color:var(--c);background:color-mix(in srgb,var(--c) 14%,transparent)}
+.ph h3{font-size:20px;font-weight:700}
+.ph .abbr{font-family:var(--f-mono);font-size:13px;color:var(--muted)}
+.progress{display:grid;grid-template-columns:repeat(var(--n,12),1fr);gap:3px}
+.progress button{height:6px;border:0;border-radius:2px;background:var(--line);cursor:pointer;padding:0}
+.progress button.done{background:color-mix(in srgb,var(--ink) 35%,var(--line))}
+.progress button.on{background:var(--c)}
+.pb{padding:14px 18px;overflow:auto;flex:1;min-height:0;display:flex;flex-direction:column;gap:14px}
+.pb section{display:flex;flex-direction:column;gap:4px}
+.pb h4{margin:0;font-size:11.5px;letter-spacing:.06em;color:var(--muted);font-weight:600}
+.pb p{margin:0}
+.pb ul{margin:0;padding-left:18px;display:flex;flex-direction:column;gap:3px}
+.pb .easy{background:color-mix(in srgb,var(--c) 8%,var(--raise));border-radius:6px;padding:9px 12px}
+.pb .fault{border-left:3px solid var(--warn);padding-left:10px}
+.nav{display:flex;gap:8px;padding:12px 18px;border-top:1px solid var(--line);align-items:center}
+.nav .next{margin-left:auto;background:var(--ink);color:var(--bg);border-color:var(--ink)}
+.nav .next:hover{border-color:var(--ink);opacity:.9}
+.nav small{color:var(--muted);font-size:12px;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+
+.sld{border:1px solid var(--line);border-radius:8px;background:var(--surface);padding:16px;display:flex;flex-direction:column;gap:10px;min-width:0}
+.sld .scroll{overflow-x:auto}
+.sld svg{display:block;min-width:1000px;width:100%;height:auto}
+.sld .node{cursor:pointer}
+.sld .node rect{fill:var(--raise);stroke:var(--line);stroke-width:1.2}
+.sld .node.on rect{stroke:var(--c);stroke-width:2.4}
+.sld .node:hover rect{stroke:var(--muted)}
+.sld text{fill:var(--ink);font-family:var(--f-sans)}
+.sld .ab{font-family:var(--f-mono);font-size:12.5px;font-weight:600}
+.sld .nm{font-size:11.5px;fill:var(--muted)}
+.sld .num{font-family:var(--f-mono);font-size:10px;font-weight:600;fill:#fff}
+.note{font-size:13px;color:var(--muted);margin:0}
+
+.two{display:grid;grid-template-columns:1.35fr 1fr;gap:20px}
+.box{border:1px solid var(--line);border-radius:8px;background:var(--surface);padding:16px;display:flex;flex-direction:column;gap:10px;min-width:0}
+.tbl{overflow-x:auto}
+table{border-collapse:collapse;width:100%;font-size:13.5px}
+th,td{text-align:left;padding:7px 10px;border-bottom:1px solid var(--line);vertical-align:top}
+th{font-size:12px;color:var(--muted);font-weight:600;letter-spacing:.03em}
+td:first-child{white-space:nowrap;font-weight:600}
+.safety{display:flex;gap:6px;flex-wrap:wrap;align-items:center;font-size:13.5px}
+.safety b{font-weight:600;padding:3px 9px;border-radius:5px;background:var(--raise);border:1px solid var(--line)}
+.safety span{color:var(--muted)}
+dl{margin:0;display:grid;grid-template-columns:auto 1fr;gap:5px 14px;font-size:13.5px}
+dt{font-family:var(--f-mono);font-weight:600}
+dd{margin:0;color:var(--muted);min-width:0;overflow-wrap:anywhere}
+.en{font-family:var(--f-mono);font-size:12px;color:var(--muted);font-style:italic}
+dd .en{display:block}
+.ph .en{line-height:1.5}
+footer{font-size:12.5px;color:var(--muted)}
+
+@media (max-width:980px){
+  .stage{grid-template-columns:1fr}
+  .view{height:56vh;min-height:360px}
+  .panel{border-left:0;border-top:1px solid var(--line);height:auto}
+  .pb{overflow:visible}
+  .two{grid-template-columns:1fr}
+}
+@media (max-width:560px){
+  .band{grid-template-columns:1fr 1fr}
+  .band div:nth-child(2){border-right:0}
+  .band div:nth-child(-n+2){border-bottom:1px solid var(--line)}
+  .hint{display:none}
+  .tag em{display:none}
+  .tag.on em{display:inline}
+  .legend{font-size:11px;gap:2px 10px}
+}
+
+.series{display:flex;align-items:center;gap:6px;flex-wrap:wrap;font-size:13px}
+.series>span{color:var(--muted);margin-right:4px;font-weight:600}
+.series a{color:var(--ink);text-decoration:none;border:1px solid var(--line);background:var(--raise);border-radius:999px;padding:3px 12px}
+.series a:hover{border-color:var(--muted)}
+.series a[aria-current="page"]{background:var(--ink);color:var(--bg);border-color:var(--ink);pointer-events:none}
+</style>
+
+<div class="wrap">
+<nav class="series" aria-label="설비 계통 시리즈"><span>시리즈</span><a href="index.html">목록</a><a href="01_power-receiving-system.html">1. 수전</a><a href="02_water-supply-system.html" aria-current="page">2. 급수</a><a href="03_fire-protection-system.html">3. 소방</a><a href="04_heating-system.html">4. 난방·급탕</a><a href="05_drainage-system.html">5. 오수·배수</a><a href="06_elevator-system.html">6. 승강기</a><a href="07_home-network-cctv.html">7. 홈네트워크·CCTV</a><a href="08_parking-ventilation-ev.html">8. 주차장 환기·EV</a></nav>
+<header>
+  <h1>급수설비 계통 따라가기</h1>
+  <p class="lede">지자체 상수도관에서 세대 수도꼭지까지, 물이 지나가는 순서대로 설비를 하나씩 짚어 봅니다. 3D 모형에서 설비를 누르거나 ‘다음’을 눌러 따라가세요. 드래그하면 회전, 휠·두 손가락으로 확대됩니다.</p>
+  <div class="band" id="band">
+    <div data-z="city" data-b="0"><b>지자체 상수도</b><span>배수관 → 대표 계량기</span></div>
+    <div data-z="plant" data-b="1"><b>단지 저수·가압</b><span>저수조 → 부스터펌프</span></div>
+    <div data-z="pipe" data-b="2"><b>공용 배관</b><span>주관 · 입상관 · 감압밸브</span></div>
+    <div data-z="home" data-b="3"><b>세대</b><span>계량기 → 수전(냉수)</span></div>
+  </div>
+</header>
+
+<div class="stage">
+  <div class="view" id="view">
+    <canvas id="c" aria-label="공동주택 급수설비 3D 모형"></canvas>
+    <div class="labels" id="labels"></div>
+    <div class="tools">
+      <button id="btnAll" type="button">전체 보기</button>
+      <button id="btnTour" type="button" aria-pressed="false">자동 투어</button>
+      <button id="btnTags" type="button" aria-pressed="true">이름표</button>
+    </div>
+    <div class="legend">
+      <span style="--c:var(--city)">상수 인입·저수</span>
+      <span style="--c:var(--pump)">가압 급수</span>
+      <span style="--c:var(--drain)">오버플로·배수</span>
+      <span style="--c:var(--ctrl)">제어·전기</span>
+    </div>
+    <div class="hint">← → 키로 단계 이동</div>
+  </div>
+  <aside class="panel" id="panel" aria-live="polite">
+    <div class="ph">
+      <div class="progress" id="progress"></div>
+      <div class="meta"><span class="mono" id="pNum">01 / 12</span><span class="pill" id="pZone">상수 인입</span></div>
+      <h3 id="pTitle"></h3>
+      <div class="abbr" id="pAbbr"></div>
+      <div class="en" id="pEn"></div>
+    </div>
+    <div class="pb" id="pBody"></div>
+    <div class="nav">
+      <button type="button" id="prev">이전</button>
+      <small id="navHint"></small>
+      <button type="button" class="next" id="next">다음</button>
+    </div>
+  </aside>
+</div>
+
+<section class="sld">
+  <h2>급수 계통도로 다시 보기</h2>
+  <p class="note">설비 도면(급수 계통도)에서는 같은 설비가 이런 순서로 그려집니다. 칸을 누르면 위 3D 모형이 해당 설비로 이동합니다.</p>
+  <div class="scroll"><svg id="sld" viewBox="0 0 1060 240" role="img" aria-label="공동주택 급수 계통도"></svg></div>
+</section>
+
+<div class="two">
+  <section class="box">
+    <h2>점검 주기 한눈에 보기</h2>
+    <div class="tbl"><table>
+      <thead><tr><th>주기</th><th>무엇을</th><th>어디서</th></tr></thead>
+      <tbody>
+        <tr><td>매일</td><td>저수조 수위, 부스터펌프 토출압력·운전 대수·알람, 기계실 바닥 누수와 집수정 수위 확인 후 일지 기록</td><td>기계실</td></tr>
+        <tr><td>매월</td><td>저수조 위생점검(맨홀 잠금, 방충망, 주변 오염원), 대표 계량기와 세대 계량기 합계 대조, 발전기 시운전 때 급수펌프 기동 확인</td><td>기계실·계량기함</td></tr>
+        <tr><td>분기</td><td>만수·감수 경보 시험, 정수위밸브·감압밸브 스트레이너 청소, 감압밸브 1·2차 압력 기록</td><td>기계실·배관실</td></tr>
+        <tr><td>반기</td><td>저수조 청소(반기 1회 이상, 등록 청소업체), 세대 원격검침값 현장 대조</td><td>저수조·세대 계량기함</td></tr>
+        <tr><td>매년</td><td>저수조 수질검사(연 1회 이상), 동별 분기 밸브 개폐 작동, 압력탱크 공기압, 펌프 절연저항</td><td>기계실·단지 배관</td></tr>
+        <tr><td>겨울 전</td><td>계량기함 보온재 채우기, 노출 배관 보온·열선 확인, 기계실 창·환기구 단열</td><td>복도·지하·옥외</td></tr>
+      </tbody>
+    </table></div>
+    <div class="safety"><span>단수 공사 순서</span><b>① 사전 공지</b><span>→</span><b>② 밸브 차단·표찰</b><span>→</span><b>③ 배수·압력 해제</b><span>→</span><b>④ 작업</b><span>→</span><b>⑤ 천천히 통수·공기 빼기</b><span>→</span><b>⑥ 탁수 배출 확인</b></div>
+  </section>
+  <section class="box">
+    <h2>약어 풀이</h2>
+    <dl id="gloss"></dl>
+  </section>
+</div>
+
+<footer>교육용 일반 구성 모형입니다. 단지마다 급수 방식(부스터·고가수조), 저수조 위치와 용량, 감압 구간 나누는 방식이 다르므로 실제 관리는 해당 단지의 설비 도면과 관할 지자체·수도사업소 안내를 따르세요. 온수(급탕)는 난방·급탕 편에서 다룹니다.</footer>
+</div>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/controls/OrbitControls.js"></script>
+<script>
+(function(){
+"use strict";
+// ───────── 단계 데이터 ─────────
+const ZONE = {city:{n:"상수 인입",c:"var(--city)"}, pump:{n:"가압 급수",c:"var(--pump)"}, drain:{n:"오버플로·배수",c:"var(--drain)"}, ctrl:{n:"제어·전기",c:"var(--ctrl)"}};
+const STEPS = [
+{n:1,t:"지자체 상수도 배수관",a:"도로 밑 상수도 배수관 · 지자체 수도사업소 소유",z:"city",band:[0],tag:"배수관",
+ role:"정수장에서 깨끗하게 만든 물이 배수지를 거쳐 도로 밑 배수관을 타고 단지 앞까지 옵니다. 수압은 지역과 시간대에 따라 달라지고, 대개 고층 아파트 꼭대기까지 밀어 올릴 힘은 없어서 단지 안에서 다시 저장하고 가압합니다.",
+ easy:"도시 전체에 물을 나르는 큰 동맥입니다. 아파트는 여기서 물을 받아 쓰는 수용가입니다.",
+ field:"땅속에 묻혀 있어 보이지 않습니다. 도로나 보도 위 ‘제수밸브’, ‘상수도’라고 적힌 작은 원형·사각 뚜껑으로 위치를 짐작합니다.",
+ manage:["지자체 수도사업소의 관리 구간이므로 직접 손대지 않습니다.","단수 예고가 오면 일시와 범위를 입주민에게 공지하고, 저수조를 가득 채워 두도록 수위를 확인합니다.","단지 앞 도로가 젖어 있거나 꺼지면 관할 수도사업소(지역에 따라 국번 없이 121)에 신고합니다."],
+ fault:"상수도 사고로 물이 끊기면 단지는 저수조에 남은 물로 버팁니다. 남은 수량과 예상 복구 시각을 확인하고 절수를 안내합니다."},
+{n:2,t:"단지 인입관 · 대표 수도계량기",a:"WM(대표 계량기) · GV · 스트레이너 · 계량기함",z:"city",band:[0,1],tag:"WM",
+ role:"배수관에서 갈라진 인입관이 단지 경계의 계량기함으로 들어옵니다. 대표 계량기는 단지 전체 사용량을 재고, 이 값이 수도요금의 기준이 됩니다. 계량기는 수도사업소 기자재이고, 대체로 계량기 뒤쪽 배관부터는 단지가 관리합니다.",
+ easy:"아파트 단지 전체의 ‘대문 수도 계량기’입니다. 여기를 지난 물은 모두 단지가 책임집니다.",
+ field:"단지 출입구 근처 바닥의 철판 뚜껑 맨홀(계량기실) 안에 구경이 큰 계량기와 앞뒤 제수밸브, 이물질을 거르는 스트레이너가 있습니다. 계량기 앞 인입관의 수리·비용 부담 범위는 지자체 조례마다 달라 확인이 필요합니다.",
+ manage:["매월 대표 계량기 사용량과 세대 계량기 합계를 비교합니다. 차이가 꾸준히 커지면 공용 배관 누수를 의심합니다.","계량기함 안 물 고임, 뚜껑 위 차량·적치물, 겨울철 보온 상태를 확인합니다.","교체·용량 변경은 수도사업소와 협의해 진행합니다."],
+ fault:"대표 계량기 사용량이 갑자기 늘면 땅속 누수 가능성이 큽니다. 사용이 적은 새벽에 계량기가 계속 도는지(야간 최소 유량) 확인하고 탐지 업체를 부릅니다."},
+{n:3,t:"정수위밸브 · 전극봉 수위제어",a:"FL(정수위밸브·볼탭) · 전극봉 · 수위제어반",z:"ctrl",band:[1],tag:"FL",
+ role:"저수조 수위가 내려가면 밸브를 열어 물을 받고, 가득 차면 닫습니다. 작은 저수조는 뜨개(볼탭)로 직접 여닫고, 큰 단지는 파일럿식 정수위밸브를 쓰며 전극봉 신호로 솔레노이드를 움직이기도 합니다. 전극봉은 만수·감수 경보와 펌프 공운전 방지 신호도 보냅니다.",
+ easy:"변기 물탱크 안의 뜨개와 같습니다. 물이 차면 저절로 잠기고, 줄면 다시 열립니다.",
+ field:"저수조 위 인입관의 큰 밸브(작은 파일럿 배관과 솔레노이드가 붙어 있음), 저수조 상부의 전극봉 홀더와 여러 가닥 전선, 벽의 수위제어반(만수·감수 표시등)이 보입니다.",
+ manage:["만수·감수 경보가 실제로 울리고 관리사무소·방재실로 전달되는지 시험합니다.","전극봉에 물때가 끼면 오동작하므로 청소 때 함께 닦습니다.","정수위밸브 앞 스트레이너를 주기적으로 청소합니다."],
+ fault:"정수위밸브가 닫히지 않으면 물이 오버플로관으로 계속 버려져 수도요금이 크게 늘어납니다. 열리지 않으면 저수조가 바닥나 단지 전체가 단수됩니다."},
+{n:4,t:"저수조",a:"저수조 2조 분할 · 맨홀 · 사다리 · 흡입관",z:"city",band:[1],tag:"저수조",
+ role:"상수도 물을 일단 받아 저장해 두는 큰 물탱크입니다. 상수도 수압 변동이나 단수 때도 일정 시간 급수할 수 있게 해 주고, 펌프가 안정적으로 물을 끌어 쓰게 합니다. 칸막이로 두 칸(2조)을 나눠 두면 한 칸을 청소하는 동안 다른 칸으로 급수할 수 있습니다.",
+ easy:"집집마다 나눠 주기 전에 모아 두는 단지의 큰 물독입니다.",
+ field:"지하 기계실의 SMC 패널이나 스테인리스(STS) 조립식 탱크, 오래된 단지는 콘크리트 일체형도 있습니다. 위쪽에 잠금장치가 달린 맨홀과 사다리, 옆면에 수위계가 있습니다. 비상급수용 저수량은 세대당 일정 용량(대체로 0.5톤 수준) 이상을 두도록 정해져 있습니다.",
+ manage:["맨홀은 항상 잠가 두고, 열쇠 관리자를 정합니다.","주변에 약품·오수 배관·쓰레기를 두지 않습니다.","패널 이음부 누수, 외벽 변형, 수위계 동작을 확인합니다.","청소·검사 같은 위생관리 의무는 12단계에서 정리합니다."],
+ fault:"기계실 침수로 오염된 물이 저수조에 들어갔을 가능성이 있으면 즉시 사용을 멈추고, 물을 빼서 청소·소독하고 수질을 확인한 뒤 다시 씁니다."},
+{n:5,t:"오버플로관 · 통기관 · 배수관",a:"OF · 통기관(방충망) · 배수밸브 · 집수정 배수펌프",z:"drain",band:[1],tag:"OF",
+ role:"오버플로관은 수위 제어가 고장 났을 때 넘치는 물을 빼냅니다. 통기관은 수위가 오르내릴 때 공기가 드나들게 하고, 배수관은 청소 때 바닥 물을 뺍니다. 끝단에는 방충망을 달고, 배수구에 바로 꽂지 않고 공간을 둔 간접배수로 하수가 거꾸로 들어오지 못하게 합니다.",
+ easy:"욕조의 넘침 구멍과 배수 마개입니다. 넘침 구멍으로 물이 나오면 수도꼭지가 덜 잠긴 것입니다.",
+ field:"저수조 옆면에서 내려와 바닥 배수로 바로 위에서 끝나는 관, 저수조 위의 짧은 ‘ㄱ’자 통기관, 기계실 구석 집수정과 배수펌프가 보입니다.",
+ manage:["오버플로관 끝에서 물이 흐른 흔적이 있으면 정수위밸브를 먼저 점검합니다.","방충망 찢김·막힘을 확인합니다.","배관 끝과 배수구 사이 공간(간접배수)을 막거나 연결하지 않습니다.","집수정 배수펌프 수위 스위치를 장마 전에 시험합니다."],
+ fault:"집수정 배수펌프가 멈추면 기계실이 잠기고, 부스터펌프와 제어반이 침수되면 단지 전체가 오랫동안 단수됩니다."},
+{n:6,t:"가압 부스터펌프",a:"부스터펌프 3대 교번 · INV · 압력탱크 · PS · CV",z:"pump",band:[1],tag:"부스터",
+ role:"저수조 물을 끌어 일정한 압력으로 각 동에 밀어 보냅니다. 인버터가 사용량에 맞춰 회전수를 바꿔 압력을 일정하게 지키고, 여러 대가 번갈아(교번) 돌다가 사용이 몰리면 함께 돕니다. 압력탱크는 물을 조금 쓸 때 펌프가 너무 자주 켜지지 않게 해 주고, 체크밸브는 물이 거꾸로 흐르는 것을 막습니다.",
+ easy:"단지 전체 수도꼭지에 힘을 불어넣는 심장입니다. 쓰는 양에 맞춰 박동을 조절합니다.",
+ field:"세로형 다단펌프 3~4대가 한 받침대에 묶인 패키지와 앞쪽 인버터 제어반(설정압력·운전 대수 표시), 둥근 압력탱크가 보입니다. 오래된 단지는 양수펌프로 옥상 고가수조에 물을 올려 중력으로 내려보내는 방식도 있는데, 최상층 수압이 약하고 청소할 수조가 늘어나 부스터 방식으로 바꾸는 사례가 있습니다.",
+ manage:["설정압력과 실제 토출압력, 펌프별 운전시간을 일지에 적습니다.","교번 순서가 정상으로 돌아가는지, 예비 펌프가 살아 있는지 봅니다.","소음·진동, 축봉부(메커니컬 실) 누수, 압력탱크 공기압을 점검합니다.","인버터 고장 때 쓰는 수동(바이패스) 운전 절차를 미리 익혀 둡니다."],
+ fault:"부스터펌프가 서면 몇 분 안에 단지 전체가 단수됩니다. 알람 내용을 기록하고 예비 펌프·수동 운전으로 급수를 먼저 살린 뒤 원인을 찾습니다. 압력탱크 고장이면 펌프가 자주 켜졌다 꺼지며 수압이 출렁입니다."},
+{n:7,t:"급수 주관 · 동별 입상관",a:"땅속 급수 주관 · 동별 분기 GV · 입상관",z:"pump",band:[2],tag:"입상관",
+ role:"기계실에서 나온 급수 주관이 땅속을 지나 각 동으로 갈라지고, 동 지하나 1층에서 입상관을 타고 각 층으로 올라갑니다. 동마다 분기 밸브가 있어 한 동만 따로 단수할 수 있습니다.",
+ easy:"큰 수도관이 동마다 가지를 치고, 그 가지가 건물 안을 타고 위층으로 올라가는 줄기입니다.",
+ field:"동 지하 피트나 1층 배관실의 큰 밸브(동 이름 표찰), 각 층 계단실 옆 배관실 문 안쪽의 세로 배관입니다.",
+ manage:["동별 분기 밸브 위치도를 만들고 표찰을 붙여 둡니다.","분기 밸브는 일 년에 한 번쯤 여닫아 고착을 막습니다.","지면 침하, 이유 없는 물 고임 같은 땅속 누수 징후를 순찰 때 봅니다.","오래된 아연도강관은 녹물의 원인이 되므로 갱생·교체를 장기수선계획에 반영합니다."],
+ fault:"주관이 터지면 해당 구간 밸브부터 잠그고 단수 범위를 공지한 뒤, 필요하면 비상 급수(물차·생수)를 준비합니다."},
+{n:8,t:"감압밸브",a:"PRV 스테이션 · 저층/고층 구간 분리 · 바이패스",z:"pump",band:[2],tag:"PRV",
+ role:"부스터펌프는 최상층에 맞춰 압력을 만들기 때문에 저층은 압력이 지나치게 높아집니다. 감압밸브가 저층 구간의 압력을 낮춰 수격 소음, 수전·호스 파손, 물 낭비를 막습니다. 입상관을 저층·고층 구간으로 나누고, 초고층은 중간층 기계실에 감압 스테이션을 두어 구간을 더 나눕니다.",
+ easy:"수압이 센 아래층 수도꼭지 앞에 다는 ‘힘 조절기’입니다.",
+ field:"동 지하·1층 배관실이나 중간층 피트의 감압밸브 세트(앞뒤 압력계, 스트레이너, 비상용 바이패스 밸브)입니다. 저층 세대 계량기함마다 작은 감압밸브를 따로 다는 단지도 있습니다. 세대 수압은 대체로 0.3~0.4MPa 안팎을 넘지 않게 맞춥니다.",
+ manage:["앞(1차)·뒤(2차) 압력계 값을 정기적으로 기록합니다.","2차 압력이 서서히 오르면 밸브 시트 마모를 의심합니다.","스트레이너를 청소하고, 바이패스 밸브가 평소 잠겨 있는지 확인합니다."],
+ fault:"감압밸브가 열린 채 고장 나면 저층 세대에 높은 압력이 그대로 걸려 비데·세탁기 호스가 터지는 누수 사고가 납니다. 막히면 저층 수압이 약해집니다."},
+{n:9,t:"세대 수도계량기",a:"세대 WM · AMR/AMI 원격검침 · 계량기함 보온",z:"pump",band:[2,3],tag:"세대 WM",
+ role:"세대별 사용량을 잽니다. 많은 단지가 대표 계량기로 수도요금을 낸 뒤 세대 계량기 값으로 관리비에 나눠 부과하고, 지역·단지에 따라 세대가 수도사업소와 직접 계약하기도 합니다. 원격검침 단말이 값을 관리사무소로 보내 줍니다.",
+ easy:"각 집 문 앞의 수도 계량기입니다. 사용한 만큼 나눠 내는 기준이 됩니다.",
+ field:"복도나 계단실 벽의 계량기함 안에 계량기, 세대 지수밸브, 원격검침 단말(전선 연결)이 있습니다. 저층은 감압밸브가 함께 들어 있기도 합니다.",
+ manage:["원격검침값과 현장 지침을 주기적으로 대조합니다.","사용량이 0이거나 갑자기 늘어난 세대를 확인합니다(누수·고장·장기 공가).","겨울 전에 계량기함에 보온재를 채우고 문이 잘 닫히는지 봅니다.","검정 유효기간이 지나기 전에 교체합니다."],
+ fault:"동파로 계량기 유리가 깨지면 지수밸브를 잠그고 교체합니다. 원격검침 통신이 끊기면 수동 검침으로 대체하고 단말을 점검합니다."},
+{n:10,t:"세대 내 급수",a:"세대 지수밸브 · 냉수 배관 · 수전",z:"pump",band:[3],tag:"세대",
+ role:"계량기를 지난 냉수가 주방·욕실 수전, 세탁기, 변기로 갑니다. 온수는 별도의 급탕 계통으로 오며 난방·급탕 편에서 다룹니다.",
+ easy:"집 안으로 들어온 수돗물이 수도꼭지마다 나뉘는 마지막 구간입니다.",
+ field:"세대 계량기함의 지수밸브, 싱크대 아래 앵글밸브, 세탁기 수전, 변기 옆 밸브가 보입니다.",
+ manage:["계량기 뒤 세대 내부 배관은 입주자 관리 영역임을 안내합니다.","장기 부재 때는 세대 지수밸브를 잠그도록 안내합니다.","누수 민원이 오면 계량기 확인 방법을 알려 줍니다."],
+ fault:"아래층 누수 민원이 오면 윗집 수전을 모두 잠근 뒤 세대 계량기가 도는지 봅니다. 돌면 급수 배관 누수, 돌지 않으면 배수·결로·온수·난방 쪽을 의심합니다."},
+{n:11,t:"정전 시 급수",a:"비상발전기 연계 · ATS · 부스터 제어반 재기동",z:"ctrl",band:[1],tag:"정전",
+ role:"부스터 방식은 펌프가 멈추면 곧 단수됩니다. 그래서 급수펌프를 비상발전기 부하에 넣는 단지가 많습니다. 정전되면 발전기가 켜지고 ATS가 전원을 바꿔 연결한 뒤 펌프 제어반이 다시 기동합니다. 고가수조 방식은 수조에 남은 물만큼 시간을 법니다.",
+ easy:"전기가 끊겨도 심장(펌프)이 다시 뛰도록 예비 전원을 이어 주는 장치입니다.",
+ field:"발전기실의 발전기와 ATS, 부스터 제어반의 전원 표시와 ‘자동/수동’ 선택 스위치입니다. 급수펌프가 발전기에 연결돼 있는지는 단지 설계마다 다르므로 단선결선도에서 확인합니다.",
+ manage:["우리 단지 급수펌프가 발전기 부하인지 도면으로 확인해 인수인계 자료에 적습니다.","발전기 시운전 때 급수펌프가 실제로 기동하는지 함께 봅니다.","정전 복귀 후 인버터가 자동 재기동하는지, 알람 해제 방법이 무엇인지 익혀 둡니다."],
+ fault:"정전 뒤 전기가 돌아왔는데 펌프가 안 돌면 제어반 선택 스위치와 인버터 알람부터 확인하고 해제합니다. 장기 정전이면 고층부터 물이 끊긴다는 점을 미리 안내합니다."},
+{n:12,t:"수질 관리",a:"잔류염소 · 저수조 위생점검 · 청소 · 수질검사",z:"city",band:[0,1,2,3],tag:"수질",
+ role:"물이 저수조와 배관에 오래 머물수록 소독 효과(잔류염소)가 줄어듭니다. 그래서 저수조는 위생관리 의무 대상이며, 대체로 위생점검 월 1회 이상, 청소 반기 1회 이상, 수질검사 연 1회 이상을 해야 하고 결과를 기록·보관합니다.",
+ easy:"큰 물그릇일수록 자주 씻고, 물이 괜찮은지 정기적으로 검사받아야 합니다.",
+ field:"청소는 등록된 저수조 청소업체가 하고, 수질검사는 지정 검사기관에 맡깁니다. 일상적으로는 세대·공용 수도꼭지에서 잔류염소 측정 시약(DPD)으로 확인합니다. 수돗물 잔류염소는 수도꼭지 기준 0.1mg/L 이상이어야 합니다.",
+ manage:["청소·수질검사 일정을 연간 계획에 넣고, 청소 날은 단수 시간을 미리 공지합니다.","청소·점검·검사 기록을 보관하고 게시판 등으로 공개합니다.","준공 후 오래된 단지는 급수관 상태검사 대상인지 확인합니다."],
+ fault:"탁수·냄새·녹물 민원은 저수조 → 주관 → 세대 순으로 범위를 좁혀 원인을 찾습니다. 수질검사 결과가 부적합이면 사용을 멈추고 재청소·재검사 후 공지합니다."}
+];
+const N = STEPS.length;
+const GLOSS = [["WM","수도계량기","Water Meter"],["GV","게이트밸브(제수밸브)","Gate Valve"],["FL","정수위밸브(볼탭·플로트)","Float / Level Control Valve"],["OF","오버플로관(넘침관)","Overflow Pipe"],["SMC","SMC 패널 저수조(유리섬유 강화 수지)","Sheet Molding Compound"],["STS","스테인리스강","Stainless Steel"],["INV","인버터(회전수 제어장치)","Inverter"],["VFD","가변주파수 드라이브(인버터와 같은 말)","Variable Frequency Drive"],["PS","압력 스위치·압력 센서","Pressure Switch / Sensor"],["CV","체크밸브(역지밸브)","Check Valve"],["PRV","감압밸브","Pressure Reducing Valve"],["AMR","원격검침","Automatic Meter Reading"],["AMI","원격검침 인프라(양방향 통신)","Advanced Metering Infrastructure"],["GEN","비상발전기","Generator"],["ATS","자동절체개폐기","Automatic Transfer Switch"]];
+const EN = Object.fromEntries(GLOSS.map(g=>[g[0],g[2]]));
+const STEP_EN = {1:["Water Distribution Main"],2:["WM","GV","Strainer","Service Pipe"],3:["FL","Electrode Level Control"],4:["Water Storage Tank (2 Compartments)","SMC","STS"],5:["OF","Vent Pipe","Drain Valve","Air Gap"],6:["Booster Pump","INV","Pressure Tank","PS","CV"],7:["Water Supply Main","Riser","GV"],8:["PRV","Pressure Zoning","Bypass"],9:["WM","AMR","AMI","Freeze Protection"],10:["Unit Shut-off Valve","Cold Water Supply"],11:["GEN","ATS","Auto Restart"],12:["Residual Chlorine","Tank Cleaning","Water Quality Test"]};
+function enLine(n){return (STEP_EN[n]||[]).map(k=>EN[k]?`${k} (${EN[k]})`:k).join(" · ");}
+
+// ───────── 패널·내비 ─────────
+const $ = s => document.querySelector(s);
+let cur = 1;
+const prog = $("#progress");
+prog.style.setProperty("--n", N);
+STEPS.forEach(s=>{const b=document.createElement("button");b.type="button";b.setAttribute("aria-label",s.n+"단계 "+s.t);b.style.setProperty("--c",ZONE[s.z].c);b.onclick=()=>select(s.n);prog.appendChild(b);});
+$("#gloss").innerHTML = GLOSS.map(g=>`<dt>${g[0]}</dt><dd>${g[1]} <span class="en">${g[2]}</span></dd>`).join("");
+
+function renderPanel(){
+  const s = STEPS[cur-1], z = ZONE[s.z];
+  const panel = $("#panel"); panel.style.setProperty("--c", z.c);
+  $("#pNum").textContent = String(s.n).padStart(2,"0")+" / "+String(N).padStart(2,"0");
+  $("#pZone").textContent = z.n; $("#pZone").style.setProperty("--c", z.c);
+  $("#pTitle").textContent = s.t; $("#pAbbr").textContent = s.a; $("#pEn").textContent = enLine(s.n);
+  $("#pBody").innerHTML =
+    `<section><h4>역할</h4><p>${s.role}</p></section>
+     <section class="easy"><h4>쉽게 말하면</h4><p>${s.easy}</p></section>
+     <section><h4>현장에서는</h4><p>${s.field}</p></section>
+     <section><h4>관리 포인트</h4><ul>${s.manage.map(m=>`<li>${m}</li>`).join("")}</ul></section>
+     <section class="fault"><h4>고장·사고 시</h4><p>${s.fault}</p></section>`;
+  $("#pBody").scrollTop = 0;
+  [...prog.children].forEach((b,i)=>{b.classList.toggle("on",i+1===cur);b.classList.toggle("done",i+1<cur);b.style.setProperty("--c",ZONE[STEPS[i].z].c);});
+  $("#prev").disabled = cur===1; $("#next").textContent = cur===N ? "처음으로" : "다음";
+  $("#navHint").textContent = cur<N ? "다음: "+STEPS[cur].t : "";
+  document.querySelectorAll("#band div").forEach(d=>d.classList.toggle("on", s.band.includes(+d.dataset.b)));
+  document.querySelectorAll("#sld .node").forEach(g=>g.classList.toggle("on", +g.dataset.n===cur));
+  document.querySelectorAll(".tag").forEach(t=>{t.classList.toggle("on",+t.dataset.n===cur);});
+}
+$("#prev").onclick=()=>{stopTour(); if(cur>1) select(cur-1);};
+$("#next").onclick=()=>{stopTour(); select(cur===N?1:cur+1);};
+document.addEventListener("keydown",e=>{
+  if(e.target.closest && e.target.closest("input,textarea,select")) return;
+  if(e.key==="ArrowRight"){stopTour(); select(cur===N?1:cur+1);} else if(e.key==="ArrowLeft"&&cur>1){stopTour(); select(cur-1);}
+});
+
+// ───────── 2D 급수 계통도 ─────────
+(function buildSLD(){
+  const svg = $("#sld");
+  const main=[1,2,3,4,6,7,8,9,10], X={}, Y={};
+  main.forEach((n,i)=>{X[n]=60+i*117;Y[n]=62;});
+  X[5]=X[4]; Y[5]=172; X[11]=X[6]; Y[11]=172; X[12]=X[10]; Y[12]=172;
+  const zc = n=>ZONE[STEPS[n-1].z].c;
+  let h="";
+  const seg=(x1,y1,x2,y2,c,dash)=>`<line x1="${x1}" y1="${y1}" x2="${x2}" y2="${y2}" stroke="${c}" stroke-width="2.6" ${dash?'stroke-dasharray="5 4"':''}/>`;
+  for(let i=0;i<main.length-1;i++){const a=main[i],b=main[i+1];h+=seg(X[a]+37,Y[a],X[b]-37,Y[b], i>=4?"var(--pump)":"var(--city)");}
+  // 오버플로·배수 → 간접배수
+  h+=seg(X[4],Y[4]+20,X[5],Y[5]-20,"var(--drain)");
+  const dx=X[5]+54, dy=Y[5];
+  h+=`<line x1="${X[5]+37}" y1="${dy}" x2="${dx-8}" y2="${dy}" stroke="var(--drain)" stroke-width="2"/>`;
+  h+=`<path d="M${dx-12} ${dy+8} L${dx+12} ${dy+8} L${dx+5} ${dy+20} L${dx-5} ${dy+20} Z" fill="none" stroke="var(--drain)" stroke-width="1.6"/>`;
+  h+=`<text x="${dx}" y="${dy-8}" text-anchor="middle" class="nm">간접배수</text>`;
+  // 비상전원 → 부스터
+  h+=seg(X[11],Y[11]-20,X[6],Y[6]+20,"var(--ctrl)");
+  // 수질 확인(수전) 점선
+  h+=seg(X[12],Y[12]-20,X[10],Y[10]+20,"var(--city)",true);
+  // 구간 표기
+  const div=(x,t)=>`<text x="${x}" y="18" text-anchor="middle" class="nm">${t}</text><line x1="${x}" y1="24" x2="${x}" y2="38" stroke="var(--line)" stroke-dasharray="3 3"/>`;
+  h+=div(X[2],"수도사업소 │ 단지")+div(X[6],"무압(저수) │ 가압")+div(X[8],"저층부 감압");
+  const AB={1:"배수관",2:"WM",3:"FL",4:"저수조",5:"OF·배수",6:"P×3·INV",7:"입상관",8:"PRV",9:"세대 WM",10:"수전",11:"GEN·ATS",12:"Cl 검사"};
+  const NM={1:"지자체 상수도",2:"대표 계량기",3:"정수위·수위제어",4:"2조 분할",5:"넘침·배수·통기",6:"부스터펌프",7:"주관·입상관",8:"감압밸브",9:"세대 계량기",10:"세대 냉수",11:"정전 시 급수",12:"수질 관리"};
+  for(let n=1;n<=N;n++){
+    h+=`<g class="node" data-n="${n}" style="--c:${zc(n)}" tabindex="0" role="button" aria-label="${n}단계 ${STEPS[n-1].t}">
+      <rect x="${X[n]-37}" y="${Y[n]-20}" width="74" height="40" rx="6"/>
+      <circle cx="${X[n]-37}" cy="${Y[n]-20}" r="9" fill="${zc(n)}"/><text x="${X[n]-37}" y="${Y[n]-16.5}" text-anchor="middle" class="num">${n}</text>
+      <text x="${X[n]}" y="${Y[n]+4.5}" text-anchor="middle" class="ab">${AB[n]}</text>
+      <text x="${X[n]}" y="${Y[n]+37}" text-anchor="middle" class="nm">${NM[n]}</text></g>`;
+  }
+  svg.innerHTML=h;
+  svg.querySelectorAll(".node").forEach(g=>{
+    const go=()=>{stopTour();select(+g.dataset.n);document.querySelector(".stage").scrollIntoView({behavior:matchMedia("(prefers-reduced-motion: reduce)").matches?"auto":"smooth",block:"start"});};
+    g.addEventListener("click",go); g.addEventListener("keydown",e=>{if(e.key==="Enter"||e.key===" "){e.preventDefault();go();}});
+  });
+})();
+
+// ───────── 3D ─────────
+const REDUCE = matchMedia("(prefers-reduced-motion: reduce)").matches;
+const view = $("#view"), canvas = $("#c"), labelsEl = $("#labels");
+let three = null;
+let tour = null;
+function stopTour(){ if(tour){clearInterval(tour);tour=null;$("#btnTour").setAttribute("aria-pressed","false");$("#btnTour").textContent="자동 투어";} }
+
+function select(n, opts){
+  cur = n; renderPanel();
+  try{ history.replaceState(null,"","#s"+n); }catch(e){}
+  if(three) three.focus(n, opts);
+}
+
+function init3D(){
+  if(!window.THREE || !THREE.OrbitControls) throw new Error("three");
+  const V = (x,y,z)=>new THREE.Vector3(x,y,z);
+  const renderer = new THREE.WebGLRenderer({canvas, antialias:true});
+  renderer.setPixelRatio(Math.min(window.devicePixelRatio||1, 2));
+  renderer.shadowMap.enabled = true; renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+  const scene = new THREE.Scene();
+  const camera = new THREE.PerspectiveCamera(40, 1, 0.1, 600);
+  const controls = new THREE.OrbitControls(camera, canvas);
+  controls.enableDamping = true; controls.dampingFactor = .08; controls.maxDistance = 220; controls.minDistance = 3;
+  controls.maxPolarAngle = Math.PI*0.62;
+
+  scene.add(new THREE.HemisphereLight(0xffffff, 0x8a8f86, .75));
+  const sun = new THREE.DirectionalLight(0xffffff, .85);
+  sun.position.set(-30, 70, 45); sun.castShadow = true;
+  sun.shadow.mapSize.set(2048,2048);
+  Object.assign(sun.shadow.camera,{left:-80,right:60,top:50,bottom:-50,near:10,far:200});
+  scene.add(sun);
+
+  const COL = {city:0x13a3b3, pump:0x2f6fe0, drain:0x8a66b8, ctrl:0xe0891c};
+  const pickables = [], groups = {}, anchors = {}, doors = [], edgeMats = [];
+  for(let i=1;i<=N;i++){groups[i]=new THREE.Group();scene.add(groups[i]);}
+  const mat = (color,o={}) => new THREE.MeshStandardMaterial(Object.assign({color,roughness:.75,metalness:.08},o));
+  const glass = (color,op) => new THREE.MeshStandardMaterial({color,transparent:true,opacity:op,depthWrite:false,roughness:.3});
+  function mesh(geo,m,x,y,z){const o=new THREE.Mesh(geo,m);o.position.set(x||0,y||0,z||0);return o;}
+  function box(w,h,d,c,x,y,z,o){const m=mesh(new THREE.BoxGeometry(w,h,d),typeof c==="number"?mat(c,o):c,x,y,z);m.castShadow=true;m.receiveShadow=true;return m;}
+  function cyl(r1,r2,h,c,x,y,z,seg){const m=mesh(new THREE.CylinderGeometry(r1,r2,h,seg||18),typeof c==="number"?mat(c):c,x,y,z);m.castShadow=true;return m;}
+  function edges(obj,op){const l=new THREE.LineSegments(new THREE.EdgesGeometry(obj.geometry),new THREE.LineBasicMaterial({transparent:true,opacity:op||.55}));l.position.copy(obj.position);edgeMats.push(l.material);return l;}
+  function reg(step,obj,parent){(parent||groups[step]).add(obj);obj.traverse(o=>{if(o.isMesh){o.userData.step=step;pickables.push(o);}});return obj;}
+  function path(pts){const p=new THREE.CurvePath();for(let i=0;i<pts.length-1;i++)p.add(new THREE.LineCurve3(pts[i],pts[i+1]));return p;}
+  const flows=[];
+  // 배관(물 흐름 입자 포함). noFlow면 입자 없이 관만 그림
+  function cable(step,pts,color,r,speed,noFlow){
+    r=r||.09;
+    const c=path(pts), len=c.getLength();
+    const tube=new THREE.Mesh(new THREE.TubeGeometry(c,Math.max(8,Math.round(len*3)),r,10,false),mat(color,{roughness:.5}));
+    tube.castShadow=true; reg(step,tube);
+    if(noFlow) return c;
+    const k=Math.max(2,Math.round(len/2.2)), pm=new THREE.MeshBasicMaterial({color:new THREE.Color(color).lerp(new THREE.Color(0xffffff),.5)});
+    const geo=new THREE.SphereGeometry(r<.1?r*1.9:r*1.3,10,8);
+    for(let i=0;i<k;i++){const s=new THREE.Mesh(geo,pm);scene.add(s);flows.push({s,c,len,off:i/k,speed:speed||3});}
+    return c;
+  }
+  const pipe=(step,pts,color,r)=>cable(step,pts,color,r,0,true);
+  // 게이트밸브: 몸체 + 스템 + 핸들
+  function gv(step,x,y,z,s){const g=new THREE.Group();g.position.set(x,y,z);
+    g.add(box(s*1.2,s,s,0x4d5357,0,0,0,{metalness:.4}));
+    g.add(cyl(s*.12,s*.12,s*.9,0x9aa0a3,0,s*.9,0,8));
+    const w=mesh(new THREE.TorusGeometry(s*.45,s*.07,6,18),mat(0xc0392b),0,s*1.35,0);w.rotation.x=Math.PI/2;g.add(w);
+    reg(step,g);return g;}
+  // 수도계량기: x축 방향 배관 위
+  function wmeter(step,x,y,z,s){s=s||1;const g=new THREE.Group();g.position.set(x,y,z);
+    const b=cyl(.2*s,.2*s,.7*s,0xb08a3e,0,0,0,16);b.rotation.z=Math.PI/2;g.add(b);
+    g.add(cyl(.17*s,.17*s,.2*s,0x23272a,0,.24*s,0,16));
+    g.add(cyl(.14*s,.14*s,.02*s,0xe9eef0,0,.35*s,0,16));
+    reg(step,g);return g;}
+
+  // 지면
+  const groundMat = new THREE.MeshStandardMaterial({color:0xc3cdc6,transparent:true,opacity:.9,roughness:1,depthWrite:false});
+  const ground = mesh(new THREE.PlaneGeometry(260,150),groundMat,-10,0,0);
+  ground.rotation.x=-Math.PI/2; ground.receiveShadow=true; ground.renderOrder=2; scene.add(ground);
+  // 도로
+  const road = mesh(new THREE.PlaneGeometry(14,150),new THREE.MeshStandardMaterial({color:0x8d918c,transparent:true,opacity:.35,depthWrite:false}),-49,.02,0);
+  road.rotation.x=-Math.PI/2; road.renderOrder=3; scene.add(road);
+
+  // 1. 지자체 상수도 배수관 (도로 밑, z 방향)
+  cable(1,[V(-49,-1.5,-62),V(-49,-1.5,62)],COL.city,.35,4);
+  [-14,12].forEach(z=>{reg(1,cyl(.5,.5,.05,0x55595c,-49,.04,z,20));reg(1,cyl(.08,.08,1.4,0x6d706b,-49,-.7,z,8));});
+  gv(1,-49,-1.5,12,.55); gv(1,-49,-1.5,-14,.55);
+  anchors[1]=V(-49,.4,-8);
+
+  // 2. 인입관 · 대표 계량기함
+  cable(2,[V(-49,-1.5,0),V(-32,-1.5,0)],COL.city,.16,3);
+  const pit=mesh(new THREE.BoxGeometry(3,1.8,2.4),glass(0xb9c2c4,.16),-38.5,-.9,0); pit.renderOrder=5; scene.add(pit); scene.add(edges(pit,.6));
+  scene.add(box(3,.1,2.4,0x9da19b,-38.5,-1.85,0));
+  reg(2,box(1.3,.06,1.1,0x55595c,-36.3,.04,1.7,{metalness:.4}));
+  wmeter(2,-38.5,-1.5,0,1.15);
+  gv(2,-39.7,-1.5,0,.34); gv(2,-37.3,-1.5,0,.34);
+  const strn=cyl(.11,.11,.45,0x4d5357,-39.1,-1.68,0,10); strn.rotation.z=.6; reg(2,strn);
+  anchors[2]=V(-38.5,.4,0);
+
+  // 지하 기계실 (반투명 벽)
+  const FY=-6.5;
+  const room=mesh(new THREE.BoxGeometry(28,6.2,14),glass(0xc8cdd0,.10),-18,-3.4,0); room.renderOrder=4; scene.add(room); scene.add(edges(room,.6));
+  const floor=box(28,.12,14,0x9da19b,-18,FY-.06,0); floor.castShadow=false; scene.add(floor);
+
+  // 함(큐비클): 문 열림 재사용
+  const PANEL=0xb7b5a8;
+  function cubicle(step,x,z,w,inner,front){
+    const g=new THREE.Group(); g.position.set(x,FY,z);
+    const h=3,d=1.6;
+    g.add(box(w,h,.06,PANEL,0,h/2+.12,-d/2)); g.add(box(.06,h,d,PANEL,-w/2,h/2+.12,0)); g.add(box(.06,h,d,PANEL,w/2,h/2+.12,0));
+    g.add(box(w,.06,d,PANEL,0,h+.12,0)); g.add(box(w,.14,d,0x6e706a,0,.07,0));
+    if(inner) inner(g);
+    const pivot=new THREE.Group(); pivot.position.set(-w/2,0,d/2+.03); g.add(pivot);
+    const door=box(w-.02,h-.04,.05,PANEL,w/2,h/2+.12,0); pivot.add(door);
+    pivot.add(box(.05,.3,.08,0x333333,w-.18,1.6,.05));
+    if(front) front(pivot,w);
+    doors.push({pivot,step,a:0});
+    reg(step,g); return g;
+  }
+  const gauge=(p,x,y)=>{const m=cyl(.17,.17,.05,0xf4f4ef,x,y,.05,20);m.rotation.x=Math.PI/2;p.add(m);const b=cyl(.2,.2,.04,0x2c2c2c,x,y,.03,20);b.rotation.x=Math.PI/2;p.add(b);};
+  const lamp=(p,x,y,c)=>{p.add(mesh(new THREE.SphereGeometry(.07,10,8),mat(c,{emissive:c,emissiveIntensity:.6}),x,y,.06));};
+  const lcd=(p,x,y)=>{p.add(box(.6,.4,.08,0x23272a,x,y,.06));p.add(box(.46,.22,.02,0x5fd08a,x,y+.03,.11,{emissive:0x1f7a44}));};
+
+  // 3. 정수위밸브 · 전극봉 · 수위제어반
+  [-1.6,1.6].forEach(z=>cable(3,[V(-32,-1.5,0),V(-28,-1.5,0),V(-28,-1.5,z),V(-26.2,-1.5,z),V(-26.2,-2.15,z)],COL.city,.12,2.4));
+  reg(3,box(.75,.6,.6,0x2f5f8a,-29.8,-1.5,0,{metalness:.4}));
+  reg(3,cyl(.27,.27,.3,0x2f5f8a,-29.8,-1.05,0,16));
+  reg(3,box(.22,.26,.22,0x23272a,-29.8,-.78,0));
+  [-1.6,1.6].forEach(z=>{reg(3,mesh(new THREE.SphereGeometry(.2,14,10),mat(0xf2f1ea),-25.3,-2.6,z));
+    const arm=cyl(.025,.025,.95,0x9aa0a3,-25.75,-2.4,z,6); arm.rotation.z=Math.PI/2+.35; reg(3,arm);});
+  [-2.2,2.2].forEach(z=>{reg(3,box(.4,.2,.4,0x23272a,-22.6,-1.9,z));
+    [0,1,2,3].forEach(k=>reg(3,cyl(.025,.025,.6+k*.75,0xd0d4d6,-22.75+k*.1,-2.0-(.6+k*.75)/2,z,6)));});
+  cable(3,[V(-22.6,-1.8,2.2),V(-22.6,-.75,2.2),V(-22.6,-.75,-2.2)],COL.ctrl,.04,1.4);
+  cable(3,[V(-22.6,-1.8,-2.2),V(-22.6,-.75,-2.2),V(-30.2,-.75,-2.2),V(-30.2,-.75,-5.6),V(-30.2,-3.36,-5.6)],COL.ctrl,.04,1.4);
+  pipe(3,[V(-29.8,-.75,-2.2),V(-29.8,-.75,0),V(-29.8,-.66,0)],COL.ctrl,.035);
+  cubicle(3,-30.2,-5.6,2.2,g=>{g.add(box(1.4,1.2,.5,0x2a2e31,0,1.7,-.4));},
+    (p,w)=>{lamp(p,w/2-.4,2.4,0xe23a2e);lamp(p,w/2-.13,2.4,0xf2c230);lamp(p,w/2+.13,2.4,0x2fb05f);lamp(p,w/2+.4,2.4,0x2f8fe0);p.add(box(1.3,.14,.02,0xffffff,w/2,2.75,.04));});
+  anchors[3]=V(-29.8,-.4,0);
+
+  // 4. 저수조 2조 (SMC 패널형)
+  function tank(zc){
+    const g=new THREE.Group(); g.position.set(-24,0,zc);
+    g.add(box(6.2,.3,5.2,0x8e9590,0,FY+.15,0));
+    const shell=mesh(new THREE.BoxGeometry(6,4.2,5),glass(0xe4eff2,.30),0,-4.1,0); shell.renderOrder=6; g.add(shell); g.add(edges(shell,.75));
+    for(let i=-2;i<=2;i++){if(i) g.add(box(.03,4.2,.03,0xb9c8cc,i,-4.1,2.51));}
+    const water=mesh(new THREE.BoxGeometry(5.8,3.0,4.8),glass(0x2a9fd0,.42),0,-4.65,0); water.renderOrder=5; g.add(water);
+    g.add(cyl(.45,.45,.25,0x9aa6aa,-1.2,-1.87,0,20)); g.add(cyl(.52,.52,.06,0x6f7b80,-1.2,-1.72,0,20));
+    g.add(box(.12,.1,.12,0xd9a51e,-.7,-1.72,0));
+    [-.25,.25].forEach(dz=>g.add(cyl(.03,.03,4.7,0x8b9396,-3.12,-3.85,dz,6)));
+    for(let y=-5.9;y<=-1.8;y+=.45) g.add(box(.04,.04,.5,0x8b9396,-3.12,y,0));
+    const lvl=mesh(new THREE.CylinderGeometry(.06,.06,3.6,8),glass(0xffffff,.5),2.6,-4.1,Math.sign(zc)*2.53); g.add(lvl);
+    reg(4,g);
+  }
+  tank(-3.2); tank(3.2);
+  [-3.2,3.2].forEach(z=>{cable(4,[V(-21,-5.9,z),V(-15.6,-5.9,z),V(-15.6,-5.9,0)],COL.city,.14,2.6); gv(4,-19.2,-5.9,z,.32);});
+  anchors[4]=V(-24,-1.3,3.2);
+
+  // 5. 오버플로 · 통기 · 배수 · 집수정
+  [-3.2,3.2].forEach(zc=>{const sg=Math.sign(zc), zo=zc+sg*1.5, zd=zc-sg*1.6, zv=zc+sg*1.6;
+    cable(5,[V(-21,-2.6,zo),V(-20.3,-2.6,zo),V(-20.3,-6.15,zo)],COL.drain,.1,2);
+    reg(5,cyl(.13,.13,.06,0x3b4447,-20.3,-6.15,zo,12));
+    cable(5,[V(-21,-6.02,zd),V(-20.3,-6.02,zd),V(-20.3,-6.3,zd)],COL.drain,.07,1.2);
+    reg(5,box(.18,.18,.18,0x4d5357,-20.65,-6.02,zd));
+    pipe(5,[V(-21.8,-2.0,zv),V(-21.8,-.9,zv),V(-21.2,-.9,zv),V(-21.2,-1.2,zv)],COL.drain,.08);
+    reg(5,cyl(.14,.16,.12,0x6f7b80,-21.2,-1.25,zv,12));});
+  reg(5,box(.7,.06,12.4,0x3b4447,-20.3,FY+.03,0));
+  reg(5,box(1.4,.06,1.4,0x2a3134,-18.9,FY+.03,6.1));
+  reg(5,cyl(.22,.22,.6,0x3c6e9a,-18.9,FY+.36,6.1,14));
+  cable(5,[V(-18.9,FY+.66,6.1),V(-18.9,-.4,6.1)],COL.drain,.05,1.6);
+  anchors[5]=V(-20.3,-1.8,4.7);
+
+  // 6. 부스터펌프 3대 · 압력탱크 · 제어반
+  const PZ=[-2.4,0,2.4];
+  PZ.forEach(z=>{
+    reg(6,box(1.1,.2,1.0,0x4a4e50,-14,FY+.1,z));
+    reg(6,cyl(.3,.3,1.4,0x2c5d8a,-14,-5.6,z,16));
+    reg(6,cyl(.38,.38,1.1,0x3c6e9a,-14,-4.35,z,16));
+    reg(6,cyl(.3,.38,.15,0x2a2e31,-14,-3.73,z,16));
+    cable(6,[V(-15.6,-5.9,z),V(-14.33,-5.9,z)],COL.city,.09,1.6);
+    cable(6,[V(-13.67,-5.9,z),V(-12.6,-5.9,z),V(-12.6,-4.6,z)],COL.pump,.09,1.8);
+    reg(6,box(.28,.3,.28,0x23272a,-12.6,-5.3,z));
+  });
+  cable(6,[V(-12.6,-4.6,-2.4),V(-12.6,-4.6,0)],COL.pump,.15,2.2);
+  cable(6,[V(-12.6,-4.6,2.4),V(-12.6,-4.6,0)],COL.pump,.15,2.2);
+  pipe(6,[V(-12.6,-4.6,2.4),V(-12.6,-4.6,4.7)],COL.pump,.12);
+  reg(6,cyl(.55,.55,1.9,0xc0392b,-12.6,-5.4,5.25,20)); reg(6,mesh(new THREE.SphereGeometry(.55,20,10,0,Math.PI*2,0,Math.PI/2),mat(0xc0392b),-12.6,-4.45,5.25));
+  cable(6,[V(-12.6,-4.6,0),V(-8,-4.6,0),V(-8,-1.5,0),V(-4,-1.5,0)],COL.pump,.17,3);
+  reg(6,box(.2,.25,.2,0x23272a,-9.6,-4.32,0)); (function(){const d=cyl(.16,.16,.04,0xf4f4ef,-9.6,-4.0,0,16);d.rotation.x=Math.PI/2;reg(6,d);})();
+  cubicle(6,-11.4,-5.6,2.2,g=>{g.add(box(1.4,1.4,.5,0x2a2e31,0,1.6,-.4));},
+    (p,w)=>{lcd(p,w/2,2.45);gauge(p,w/2-.6,1.9);lamp(p,w/2-.1,1.9,0x2fb05f);lamp(p,w/2+.15,1.9,0x2fb05f);lamp(p,w/2+.4,1.9,0xf2c230);});
+  cable(6,[V(-11.4,-3.36,-5.6),V(-11.4,-.8,-5.6),V(-14,-.8,-5.6),V(-14,-.8,2.4)],COL.ctrl,.04,1.4);
+  PZ.forEach(z=>pipe(6,[V(-14,-.8,z),V(-14,-3.66,z)],COL.ctrl,.03));
+  anchors[6]=V(-14,-3.2,0);
+
+  // 7. 급수 주관 → 동별 입상관
+  const BX=30, BZ=0, BW=12, BD=10, FL=15, FH=2, RH=24.6, RL=26.2, RZ=3.8;
+  cable(7,[V(-4,-1.5,0),V(RH,-1.5,0),V(RH,-1.5,RZ),V(RH,FL*FH-1,RZ)],COL.pump,.18,3.4);
+  cable(7,[V(12,-1.5,0),V(12,-1.5,-16)],COL.pump,.15,3);
+  reg(7,cyl(.2,.2,.12,0x4d5357,12,-1.5,-16,14)).rotation.x=Math.PI/2;
+  gv(7,12,-1.5,-1.6,.4); gv(7,21,-1.5,0,.4);
+  reg(7,cyl(.45,.45,.05,0x55595c,21,.04,0,20)); reg(7,cyl(.45,.45,.05,0x55595c,12,.04,-1.6,20));
+  anchors[7]=V(RH,20,RZ);
+
+  // 아파트 동
+  const bld=mesh(new THREE.BoxGeometry(BW,FL*FH,BD),glass(0xd5d9dc,.07),BX,FL*FH/2,BZ); bld.renderOrder=6; scene.add(bld); scene.add(edges(bld,.7));
+  const slabM=glass(0xc0c6ca,.18);
+  for(let f=1;f<=FL;f++){const s=mesh(new THREE.BoxGeometry(BW,.1,BD),slabM,BX,f*FH,BZ);s.renderOrder=4;scene.add(s);}
+  const shaftG=mesh(new THREE.BoxGeometry(2.6,FL*FH,1.4),glass(0x7f8f98,.10),25.4,FL*FH/2,RZ+.2); shaftG.renderOrder=6; scene.add(shaftG); scene.add(edges(shaftG,.35));
+
+  // 8. 감압밸브 스테이션 (1층) → 저층 입상관 1~7층
+  const LOWF=7;
+  cable(8,[V(RH,1.0,RZ),V(RL,1.0,RZ),V(RL,(LOWF-1)*FH+1.3,RZ)],COL.pump,.12,2.2);
+  reg(8,box(.5,.5,.5,0x2f5f8a,25.4,1.0,RZ,{metalness:.4}));
+  reg(8,cyl(.18,.24,.45,0x2f5f8a,25.4,1.45,RZ,14));
+  reg(8,cyl(.06,.06,.25,0x9aa0a3,25.4,1.8,RZ,8));
+  [24.95,25.85].forEach(x=>{reg(8,cyl(.025,.025,.25,0x9aa0a3,x,1.22,RZ,6));const d=cyl(.12,.12,.04,0xf4f4ef,x,1.42,RZ,14);d.rotation.x=Math.PI/2;reg(8,d);});
+  pipe(8,[V(24.85,1.0,RZ),V(24.85,.45,RZ),V(25.95,.45,RZ),V(25.95,1.0,RZ)],COL.pump,.06);
+  gv(8,25.4,.45,RZ,.2);
+  anchors[8]=V(25.4,2.0,RZ);
+
+  // 9. 세대 계량기함(층별) · 층 분기관
+  const UF=5, fyU=(UF-1)*FH+1.0;
+  for(let f=1;f<=FL;f++){
+    const fy=(f-1)*FH+1.0, rx=f<=LOWF?RL:RH;
+    const pts=[V(rx,fy,RZ),V(rx,fy,4.42),V(26.97,fy,4.42)];
+    if(f===UF){
+      cable(9,pts,COL.pump,.05,1.4);
+      reg(9,box(.5,.66,.04,0x9ea3a0,27.2,fy+.05,4.32));
+      wmeter(9,27.2,fy,4.42,.6);
+      reg(9,box(.12,.1,.08,0x23272a,27.2,fy+.3,4.5));
+    } else {
+      pipe(9,pts,COL.pump,.04);
+      reg(9,box(.48,.6,.28,0x9ea3a0,27.2,fy+.05,4.5));
+    }
+  }
+  anchors[9]=V(27.2,fyU+.8,4.6);
+
+  // 10. 세대 내 급수 (5층 세대)
+  const uy=(UF-1)*FH;
+  const unit=mesh(new THREE.BoxGeometry(6,FH-.16,4.6),glass(0x8fd3e8,.22),31,uy+FH/2,2.5); unit.renderOrder=7; reg(10,unit);
+  cable(10,[V(27.43,fyU,4.42),V(28.4,fyU,4.42),V(28.4,uy+.35,4.42),V(31.3,uy+.35,4.42),V(31.3,uy+1.2,4.42),V(31.3,uy+1.2,4.15)],COL.pump,.045,1.3);
+  reg(10,box(.14,.14,.14,0xc0392b,28.4,fyU-.2,4.42));
+  reg(10,box(1.6,.85,.6,0xe9e6dc,31.3,uy+.08+.425,4.3));
+  reg(10,box(1.0,.08,.45,0xc9ced0,31.3,uy+.95,4.28));
+  reg(10,cyl(.03,.03,.25,0xc9ced0,31.3,uy+1.06,4.15,8));
+  reg(10,box(.7,.8,.65,0xf2f1ea,29.2,uy+.48,1.0));
+  pipe(10,[V(28.4,uy+.35,4.42),V(28.4,uy+.35,1.0),V(28.85,uy+.35,1.0)],COL.pump,.035);
+  anchors[10]=V(31.3,uy+1.8,4.3);
+
+  // 11. 정전 시 급수: 비상발전기 · ATS → 부스터 제어반
+  reg(11,box(2.7,.2,1.5,0x3a3e40,-6.6,FY+.1,-5.4));
+  reg(11,box(2.4,1.3,1.3,0x2f7a4c,-6.6,FY+.85,-5.4,{metalness:.3}));
+  reg(11,cyl(.12,.12,4.6,0x6a6a6a,-5.7,FY+3.6,-5.8,10));
+  cubicle(11,-9.2,-5.6,1.2,g=>{g.add(box(.8,1.0,.5,0x2a2e31,0,1.6,-.4));},
+    (p,w)=>{lamp(p,w/2-.25,2.4,0xe23a2e);lamp(p,w/2,2.4,0x2fb05f);lamp(p,w/2+.25,2.4,0xf2c230);});
+  cable(11,[V(-6.6,FY+1.5,-5.4),V(-6.6,-1.0,-5.4),V(-9.2,-1.0,-5.4),V(-9.2,-3.36,-5.4)],COL.ctrl,.06,1.6);
+  cable(11,[V(-4,-1.2,-6.1),V(-9.2,-1.2,-6.1),V(-9.2,-3.36,-6.1)],COL.ctrl,.05,1.6);
+  cable(11,[V(-9.2,-1.0,-5.0),V(-11.4,-1.0,-5.0),V(-11.4,-3.36,-5.0)],COL.ctrl,.06,1.6);
+  anchors[11]=V(-7.8,-4.2,-5.4);
+
+  // 12. 수질 관리: 채수꼭지 · 측정 키트
+  reg(12,box(1.1,1.0,.7,0x8e9590,-29.6,FY+.5,5.0));
+  reg(12,box(.55,.22,.35,0xf4f4ef,-29.75,FY+1.11,5.0));
+  [-29.25,-29.1].forEach(x=>reg(12,cyl(.06,.06,.26,0x5aa9d6,x,FY+1.13,5.0,10)));
+  (function(){const t=cyl(.04,.04,.35,0xc9ced0,-7.8,-3.2,0,8);t.rotation.z=Math.PI/2;reg(12,t);reg(12,cyl(.03,.03,.12,0xc9ced0,-7.62,-3.27,0,6));reg(12,box(.06,.14,.06,0x2f8fe0,-7.75,-3.05,0));})();
+  anchors[12]=V(-29.6,-4.9,5.0);
+
+  // 하이라이트 링
+  const ring=mesh(new THREE.RingGeometry(.9,1.05,40),new THREE.MeshBasicMaterial({color:0xffffff,transparent:true,opacity:.9,side:THREE.DoubleSide,depthTest:false}));
+  ring.renderOrder=20; scene.add(ring);
+
+  // 카메라 시점
+  const VIEWS={
+    0:[V(-16,40,74),V(-8,2,0)],
+    1:[V(-64,9,22),V(-49,-1.5,0)],
+    2:[V(-33,4.5,8.5),V(-38.6,-1.3,0)],
+    3:[V(-22.5,4,11),V(-27.2,-2,-.8)],
+    4:[V(-12,4,17),V(-23.5,-4,0)],
+    5:[V(-12.5,2.5,15),V(-20.5,-4.6,2.4)],
+    6:[V(-5,2.5,12),V(-12.8,-4.8,0)],
+    7:[V(-2,20,40),V(14,6,2)],
+    8:[V(21,4.5,11),V(25.3,1.2,RZ)],
+    9:[V(21,13,13),V(26.8,fyU,4.4)],
+    10:[V(36.5,uy+4.5,10.5),V(30.5,uy+.8,3)],
+    11:[V(-1,2.5,8),V(-8.6,-5,-4.8)],
+    12:[V(-21,3,15),V(-27.5,-5,3)]
+  };
+  const UNDER={1:1,2:1,3:1,4:1,5:1,6:1,7:1,11:1,12:1};
+  let tween=null, sel=1, groundTarget=.9, hoverStep=0;
+
+  function fit(p,t){const asp=view.clientWidth/Math.max(1,view.clientHeight);const k=asp<1?1.55:asp<1.3?1.2:1;return t.clone().add(p.clone().sub(t).multiplyScalar(k));}
+  function flyTo(i,instant){const [p,t]=VIEWS[i];const pp=fit(p,t);
+    if(REDUCE||instant){camera.position.copy(pp);controls.target.copy(t);controls.update();tween=null;return;}
+    tween={p0:camera.position.clone(),t0:controls.target.clone(),p1:pp,t1:t.clone(),s:performance.now(),d:1500};}
+
+  // 하이라이트 재질
+  function paint(){
+    for(let i=1;i<=N;i++){
+      groups[i].traverse(o=>{ if(!o.isMesh||!o.material.emissive) return;
+        if(o.userData.baseE===undefined) o.userData.baseE=o.material.emissive.getHex();
+        if(i===sel){o.material.emissive.setHex(0xffb15c);o.userData.hl=true;}
+        else {o.material.emissive.setHex(o.userData.baseE);o.material.emissiveIntensity=1;o.userData.hl=false;}
+      });
+    }
+  }
+
+  // HTML 이름표
+  const tags={};
+  STEPS.forEach(s=>{const b=document.createElement("button");b.type="button";b.className="tag";b.dataset.n=s.n;
+    b.style.setProperty("--c",ZONE[s.z].c);b.innerHTML=`<i>${s.n}</i><span>${s.tag}</span><em>${s.t===s.tag?"":s.t}</em>`;
+    b.setAttribute("aria-label",s.n+"단계 "+s.t);
+    b.onclick=()=>{stopTour();select(s.n);};labelsEl.appendChild(b);tags[s.n]=b;});
+  STEPS.forEach(s=>{const e=tags[s.n].querySelector("em"); if(s.t===s.tag) e.remove();});
+
+  // 테마
+  function theme(){
+    const cs=getComputedStyle(document.documentElement), g=k=>cs.getPropertyValue(k).trim()||"#888";
+    const bg=new THREE.Color(g("--scene-bg"));
+    scene.background=bg; scene.fog=new THREE.Fog(bg,160,340);
+    groundMat.color.set(g("--scene-ground"));
+    const ln=new THREE.Color(g("--scene-line")); edgeMats.forEach(m=>m.color.copy(ln));
+    ring.material.color.set(g("--focus"));
+  }
+  theme();
+  matchMedia("(prefers-color-scheme: dark)").addEventListener("change",theme);
+  new MutationObserver(theme).observe(document.documentElement,{attributes:true,attributeFilter:["data-theme","style","class"]});
+
+  // 크기
+  function resize(){const w=view.clientWidth,h=view.clientHeight;renderer.setSize(w,h,false);camera.aspect=w/h;camera.updateProjectionMatrix();}
+  new ResizeObserver(resize).observe(view); resize();
+
+  // 클릭/호버
+  const ray=new THREE.Raycaster(), mv=new THREE.Vector2(); let down=null;
+  function hit(e){const r=canvas.getBoundingClientRect();mv.set(((e.clientX-r.left)/r.width)*2-1,-((e.clientY-r.top)/r.height)*2+1);ray.setFromCamera(mv,camera);
+    const h=ray.intersectObjects(pickables,false).find(x=>x.object.visible);return h?h.object.userData.step:0;}
+  canvas.addEventListener("pointerdown",e=>{down=[e.clientX,e.clientY];stopTour();tween=null;});
+  canvas.addEventListener("pointerup",e=>{if(down&&Math.hypot(e.clientX-down[0],e.clientY-down[1])<6){const s=hit(e);if(s)select(s);}down=null;});
+  let lastHover=0;
+  canvas.addEventListener("pointermove",e=>{if(e.buttons||e.pointerType!=="mouse")return;const now=performance.now();if(now-lastHover<60)return;lastHover=now;
+    hoverStep=hit(e);canvas.style.cursor=hoverStep?"pointer":"grab";});
+
+  // 루프
+  const tmp=new THREE.Vector3(); let last=performance.now();
+  function loop(now){
+    const dt=Math.min(.05,(now-last)/1000); last=now;
+    if(tween){let k=Math.min(1,(now-tween.s)/tween.d);k=k<.5?4*k*k*k:1-Math.pow(-2*k+2,3)/2;
+      camera.position.lerpVectors(tween.p0,tween.p1,k);controls.target.lerpVectors(tween.t0,tween.t1,k);if(k>=1)tween=null;}
+    controls.update();
+    // 물 흐름
+    const t=now/1000;
+    flows.forEach(f=>{const u=REDUCE?f.off:((f.off+t*f.speed/f.len)%1);f.c.getPointAt(u,f.s.position);});
+    // 문 열림
+    doors.forEach(d=>{const target=d.step===sel?-1.9:0;d.a+=(target-d.a)*Math.min(1,dt*5);d.pivot.rotation.y=d.a;});
+    // 지면 투명도
+    groundTarget=UNDER[sel]?.28:.9; groundMat.opacity+=(groundTarget-groundMat.opacity)*Math.min(1,dt*4);
+    // 하이라이트 펄스
+    const pulse=REDUCE?.35:.22+.18*Math.sin(t*3.2);
+    groups[sel].traverse(o=>{if(o.isMesh&&o.userData.hl)o.material.emissiveIntensity=pulse;});
+    // 링
+    ring.position.copy(anchors[sel]); ring.quaternion.copy(camera.quaternion);
+    const sc=camera.position.distanceTo(ring.position)*.045*(REDUCE?1:1+.12*Math.sin(t*3.2)); ring.scale.setScalar(sc);
+    renderer.render(scene,camera);
+    // 이름표
+    const w=view.clientWidth,h=view.clientHeight, show=$("#btnTags").getAttribute("aria-pressed")==="true";
+    for(let i=1;i<=N;i++){const el=tags[i];tmp.copy(anchors[i]).project(camera);
+      const vis=tmp.z<1&&tmp.x>-1.1&&tmp.x<1.1&&tmp.y>-1.1&&tmp.y<1.1&&(show||i===sel);
+      if(!vis){el.hidden=true;continue;} el.hidden=false;
+      const yo = i===sel? -26 : -16;
+      el.style.transform=`translate(${(tmp.x*.5+.5)*w}px,${(-tmp.y*.5+.5)*h+yo}px) translate(-50%,-50%)`;
+      el.classList.toggle("dim",i!==sel&&i!==hoverStep&&tmp.z>.995);}
+    requestAnimationFrame(loop);
+  }
+
+  return {
+    focus(n,o){sel=n;paint();flyTo(n,o&&o.instant);},
+    overview(instant){flyTo(0,instant);},
+    start(){requestAnimationFrame(loop);}
+  };
+}
+
+// ───────── 시작 ─────────
+try{ three=init3D(); }catch(e){
+  three=null;
+  const d=document.createElement("div");d.className="nogl";
+  d.innerHTML="<p>이 브라우저에서는 3D 모형을 불러오지 못했습니다.<br>오른쪽 설명과 아래 급수 계통도로 같은 내용을 따라갈 수 있습니다.</p>";
+  view.appendChild(d); canvas.hidden=true; document.querySelector(".tools").hidden=true; document.querySelector(".hint").hidden=true;
+}
+const m=/^#s(\d{1,2})$/.exec(location.hash||""); const first=m&&+m[1]>=1&&+m[1]<=N?+m[1]:1;
+if(three){ three.focus(first,{instant:true}); if(!m) three.overview(true); three.start(); }
+cur=first; renderPanel();
+
+$("#btnAll").onclick=()=>{stopTour(); if(three) three.overview();};
+$("#btnTags").onclick=e=>{const b=e.currentTarget;b.setAttribute("aria-pressed",b.getAttribute("aria-pressed")==="true"?"false":"true");};
+$("#btnTour").onclick=e=>{
+  if(tour){stopTour();return;}
+  const b=e.currentTarget;b.setAttribute("aria-pressed","true");b.textContent="투어 멈춤";
+  select(cur===N?1:cur);
+  tour=setInterval(()=>{ if(cur>=N){stopTour();return;} select(cur+1); },7000);
+};
+window.addEventListener("hashchange",()=>{const k=/^#s(\d{1,2})$/.exec(location.hash);if(k&&+k[1]!==cur&&+k[1]>=1&&+k[1]<=N)select(+k[1]);});
+})();
+</script>
