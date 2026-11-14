@@ -1,0 +1,814 @@
+<title>주차장 환기·EV 충전 따라가기</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@500;600&family=IBM+Plex+Sans+KR:wght@400;500;700&display=swap">
+<style>
+/* layout: 구간 띠(급기│공기 흐름·감지│배기│전기차 충전) → [3D 지하주차장 모형 | 설비 설명 패널] → 계통도 → 점검 주기표 → 약어 */
+:root{
+  --bg:#e9eef1; --surface:#f6f9fb; --raise:#ffffff; --ink:#18232b; --muted:#53626c; --line:#cbd6dc;
+  --fresh:#1a8cc8; --exh:#86705b; --power:#d9680b; --sense:#7650b8; --fire:#c9302a; --warn:#c3342a; --focus:#0a7bbd;
+  --scene-bg:#d8e2e7; --scene-ground:#c2ccc5; --scene-line:#61737b;
+  --f-sans:"IBM Plex Sans KR","Apple SD Gothic Neo","Malgun Gothic",system-ui,sans-serif;
+  --f-mono:"IBM Plex Mono",ui-monospace,Menlo,Consolas,monospace;
+}
+@media (prefers-color-scheme: dark){:root:not([data-theme="light"]){
+  --bg:#0f1519; --surface:#151f26; --raise:#1b2730; --ink:#e3ebef; --muted:#97a7af; --line:#29373f;
+  --fresh:#5cc4f5; --exh:#c4aa8d; --power:#ffa149; --sense:#b996ee; --fire:#ff6b5c; --warn:#ff6b5c; --focus:#5cc0ff;
+  --scene-bg:#121b21; --scene-ground:#1c292e; --scene-line:#7c9099; color-scheme:dark}}
+:root[data-theme="dark"]{
+  --bg:#0f1519; --surface:#151f26; --raise:#1b2730; --ink:#e3ebef; --muted:#97a7af; --line:#29373f;
+  --fresh:#5cc4f5; --exh:#c4aa8d; --power:#ffa149; --sense:#b996ee; --fire:#ff6b5c; --warn:#ff6b5c; --focus:#5cc0ff;
+  --scene-bg:#121b21; --scene-ground:#1c292e; --scene-line:#7c9099; color-scheme:dark}
+
+*{box-sizing:border-box}
+[hidden]{display:none!important}
+body{background:var(--bg);color:var(--ink);font-family:var(--f-sans);font-size:15px;line-height:1.6;
+  padding-left:max(16px,env(safe-area-inset-left,0px));padding-right:max(16px,env(safe-area-inset-right,0px));padding-block:20px 48px}
+.wrap{max-width:1360px;margin:0 auto;display:flex;flex-direction:column;gap:28px}
+h1,h2,h3{text-wrap:balance;margin:0;line-height:1.3}
+h1{font-size:clamp(22px,3vw,30px);font-weight:700;letter-spacing:-.01em;word-break:keep-all}
+h2{font-size:19px;font-weight:700}
+.mono{font-family:var(--f-mono)}
+button{font:inherit;color:inherit}
+:focus-visible{outline:2px solid var(--focus);outline-offset:2px}
+
+header{display:flex;flex-direction:column;gap:14px}
+.lede{color:var(--muted);margin:0;max-width:68ch}
+.band{display:grid;grid-template-columns:1fr 1.3fr 1fr 1.4fr;border:1px solid var(--line);border-radius:6px;overflow:hidden;font-size:13px}
+.band div{padding:8px 12px;display:flex;flex-direction:column;gap:1px;border-right:1px solid var(--line);background:var(--surface);transition:background .3s;min-width:0}
+.band div:last-child{border-right:0}
+.band b{font-weight:600}
+.band span{font-family:var(--f-mono);font-size:12px;color:var(--muted)}
+.band div[data-z="supply"].on{background:color-mix(in srgb,var(--fresh) 16%,var(--surface))}
+.band div[data-z="flow"].on{background:color-mix(in srgb,var(--fresh) 10%,color-mix(in srgb,var(--sense) 10%,var(--surface)))}
+.band div[data-z="exhaust"].on{background:color-mix(in srgb,var(--exh) 18%,var(--surface))}
+.band div[data-z="ev"].on{background:color-mix(in srgb,var(--power) 15%,var(--surface))}
+.band div.on b{color:var(--ink)}
+.band div::before{content:"";display:block;height:3px;border-radius:2px;margin-bottom:5px;background:var(--line)}
+.band div[data-z="supply"]::before{background:var(--fresh)}
+.band div[data-z="flow"]::before{background:linear-gradient(90deg,var(--fresh),var(--sense))}
+.band div[data-z="exhaust"]::before{background:var(--exh)}
+.band div[data-z="ev"]::before{background:linear-gradient(90deg,var(--power) 70%,var(--fire))}
+
+.stage{display:grid;grid-template-columns:minmax(0,1fr) 400px;gap:0;border:1px solid var(--line);border-radius:8px;overflow:hidden;background:var(--surface)}
+.view{position:relative;min-height:560px;height:min(76vh,720px);background:var(--scene-bg)}
+.view canvas{display:block;width:100%;height:100%;touch-action:none;cursor:grab}
+.view canvas:active{cursor:grabbing}
+.labels{position:absolute;inset:0;pointer-events:none;overflow:hidden}
+.tag{position:absolute;left:0;top:0;pointer-events:auto;transform:translate(-50%,-50%);display:flex;align-items:center;gap:5px;
+  border:1px solid var(--line);background:var(--raise);border-radius:999px;padding:2px 8px 2px 3px;font-size:12px;white-space:nowrap;cursor:pointer;
+  box-shadow:0 1px 3px rgb(0 0 0 / .12);transition:opacity .2s}
+.tag i{font-style:normal;font-family:var(--f-mono);font-weight:600;font-size:11px;width:19px;height:19px;border-radius:50%;display:grid;place-items:center;color:#fff;background:var(--c)}
+.tag em{font-style:normal;font-family:var(--f-mono);font-size:11px;color:var(--muted)}
+.tag.on{border-color:var(--c);z-index:5;font-weight:600}
+.tag.on em{color:var(--ink)}
+.tag.dim{opacity:.55}
+.tools{position:absolute;top:10px;left:10px;display:flex;gap:6px;flex-wrap:wrap}
+.tools button,.nav button{border:1px solid var(--line);background:var(--raise);border-radius:6px;padding:6px 11px;font-size:13px;cursor:pointer}
+.tools button:hover,.nav button:hover{border-color:var(--muted)}
+.tools button[aria-pressed="true"]{background:var(--ink);color:var(--bg);border-color:var(--ink)}
+.legend{position:absolute;bottom:10px;left:10px;right:10px;width:max-content;max-width:calc(100% - 20px);display:flex;gap:4px 12px;flex-wrap:wrap;font-size:12px;background:color-mix(in srgb,var(--raise) 88%,transparent);border:1px solid var(--line);border-radius:6px;padding:5px 10px}
+.legend span{display:flex;align-items:center;gap:5px}
+.legend span::before{content:"";width:14px;height:3px;border-radius:2px;background:var(--c)}
+.hint{position:absolute;bottom:10px;right:10px;font-size:12px;color:var(--muted);background:color-mix(in srgb,var(--raise) 88%,transparent);border-radius:6px;padding:4px 8px}
+.nogl{position:absolute;inset:0;display:grid;place-items:center;text-align:center;padding:24px;color:var(--muted)}
+
+.panel{border-left:1px solid var(--line);display:flex;flex-direction:column;min-height:0;height:min(76vh,720px);min-width:0}
+.ph{padding:16px 18px 12px;border-bottom:1px solid var(--line);display:flex;flex-direction:column;gap:8px}
+.ph .meta{display:flex;align-items:center;gap:8px;font-size:12px;color:var(--muted)}
+.pill{font-size:11.5px;font-weight:600;padding:1px 8px;border-radius:999px;color:var(--c);background:color-mix(in srgb,var(--c) 14%,transparent)}
+.ph h3{font-size:20px;font-weight:700}
+.ph .abbr{font-family:var(--f-mono);font-size:13px;color:var(--muted)}
+.progress{display:grid;grid-template-columns:repeat(var(--n,12),1fr);gap:3px}
+.progress button{height:6px;border:0;border-radius:2px;background:var(--line);cursor:pointer;padding:0}
+.progress button.done{background:color-mix(in srgb,var(--ink) 35%,var(--line))}
+.progress button.on{background:var(--c)}
+.pb{padding:14px 18px;overflow:auto;flex:1;min-height:0;display:flex;flex-direction:column;gap:14px}
+.pb section{display:flex;flex-direction:column;gap:4px}
+.pb h4{margin:0;font-size:11.5px;letter-spacing:.06em;color:var(--muted);font-weight:600}
+.pb p{margin:0}
+.pb ul{margin:0;padding-left:18px;display:flex;flex-direction:column;gap:3px}
+.pb .easy{background:color-mix(in srgb,var(--c) 8%,var(--raise));border-radius:6px;padding:9px 12px}
+.pb .fault{border-left:3px solid var(--warn);padding-left:10px}
+.nav{display:flex;gap:8px;padding:12px 18px;border-top:1px solid var(--line);align-items:center}
+.nav .next{margin-left:auto;background:var(--ink);color:var(--bg);border-color:var(--ink)}
+.nav .next:hover{border-color:var(--ink);opacity:.9}
+.nav small{color:var(--muted);font-size:12px;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+
+.sld{border:1px solid var(--line);border-radius:8px;background:var(--surface);padding:16px;display:flex;flex-direction:column;gap:10px;min-width:0}
+.sld .scroll{overflow-x:auto}
+.sld svg{display:block;min-width:1000px;width:100%;height:auto}
+.sld .node{cursor:pointer}
+.sld .node rect{fill:var(--raise);stroke:var(--line);stroke-width:1.2}
+.sld .node.on rect{stroke:var(--c);stroke-width:2.4}
+.sld .node:hover rect{stroke:var(--muted)}
+.sld text{fill:var(--ink);font-family:var(--f-sans)}
+.sld .ab{font-family:var(--f-mono);font-size:12.5px;font-weight:600}
+.sld .nm{font-size:11.5px;fill:var(--muted)}
+.sld .num{font-family:var(--f-mono);font-size:10px;font-weight:600;fill:#fff}
+.sld .hd{font-size:13px;font-weight:700;fill:var(--ink)}
+.note{font-size:13px;color:var(--muted);margin:0}
+
+.two{display:grid;grid-template-columns:1.35fr 1fr;gap:20px}
+.box{border:1px solid var(--line);border-radius:8px;background:var(--surface);padding:16px;display:flex;flex-direction:column;gap:10px;min-width:0}
+.tbl{overflow-x:auto}
+table{border-collapse:collapse;width:100%;font-size:13.5px}
+th,td{text-align:left;padding:7px 10px;border-bottom:1px solid var(--line);vertical-align:top}
+th{font-size:12px;color:var(--muted);font-weight:600;letter-spacing:.03em}
+td:first-child{white-space:nowrap;font-weight:600}
+.safety{display:flex;gap:6px;flex-wrap:wrap;align-items:center;font-size:13.5px}
+.safety b{font-weight:600;padding:3px 9px;border-radius:5px;background:var(--raise);border:1px solid var(--line)}
+.safety span{color:var(--muted)}
+.safety .lead{color:var(--fire);font-weight:700;width:100%}
+dl{margin:0;display:grid;grid-template-columns:auto 1fr;gap:5px 14px;font-size:13.5px}
+dt{font-family:var(--f-mono);font-weight:600}
+dd{margin:0;color:var(--muted);min-width:0;overflow-wrap:anywhere}
+.en{font-family:var(--f-mono);font-size:12px;color:var(--muted);font-style:italic}
+dd .en{display:block}
+.ph .en{line-height:1.5}
+footer{font-size:12.5px;color:var(--muted)}
+
+@media (max-width:980px){
+  .stage{grid-template-columns:1fr}
+  .view{height:56vh;min-height:360px}
+  .panel{border-left:0;border-top:1px solid var(--line);height:auto}
+  .pb{overflow:visible}
+  .two{grid-template-columns:1fr}
+}
+@media (max-width:560px){
+  .band{grid-template-columns:1fr 1fr}
+  .band div:nth-child(2){border-right:0}
+  .band div:nth-child(-n+2){border-bottom:1px solid var(--line)}
+  .hint{display:none}
+  .tag em{display:none}
+  .tag.on em{display:inline}
+  .legend{font-size:11px;gap:2px 10px}
+}
+
+.series{display:flex;align-items:center;gap:6px;flex-wrap:wrap;font-size:13px}
+.series>span{color:var(--muted);margin-right:4px;font-weight:600}
+.series a{color:var(--ink);text-decoration:none;border:1px solid var(--line);background:var(--raise);border-radius:999px;padding:3px 12px}
+.series a:hover{border-color:var(--muted)}
+.series a[aria-current="page"]{background:var(--ink);color:var(--bg);border-color:var(--ink);pointer-events:none}
+</style>
+
+<div class="wrap">
+<nav class="series" aria-label="설비 계통 시리즈"><span>시리즈</span><a href="https://claude.ai/artifact/RQfeUsLeuvXUD9krYjsrT2" target="_blank" rel="noopener">1. 수전</a><a href="https://claude.ai/artifact/GNKFoV96Mde9fiEeYaCPxu" target="_blank" rel="noopener">2. 급수</a><a href="https://claude.ai/artifact/QcEbQmw9pbrTnDaZEpobie" target="_blank" rel="noopener">3. 소방</a><a href="https://claude.ai/artifact/2xiSzJKT3oeb1BDYaaE5LZ" target="_blank" rel="noopener">4. 난방·급탕</a><a href="https://claude.ai/artifact/TGUgN1swzvWmoNVwt6x2FU" target="_blank" rel="noopener">5. 오수·배수</a><a href="https://claude.ai/artifact/3QW6URxhEZvC7udQfH9DGw" target="_blank" rel="noopener">6. 승강기</a><a href="https://claude.ai/artifact/Y8iFzrRZk6V7TBSjAsGNoR" aria-current="page">7. 주차장 환기·EV</a><a href="https://claude.ai/artifact/LtWvvBdn6C5TLMZ47MR22K" target="_blank" rel="noopener">8. 홈네트워크·CCTV</a></nav>
+<header>
+  <h1>지하주차장 환기·전기차 충전설비 따라가기</h1>
+  <p class="lede">바깥 공기가 지하주차장에 들어와 배기탑으로 나가기까지의 환기 계통과, 전기실 저압반에서 전기차 배터리까지 가는 충전 계통을 순서대로 짚어 봅니다. 3D 모형에서 설비를 누르거나 ‘다음’을 눌러 따라가세요. 드래그하면 회전, 휠·두 손가락으로 확대됩니다.</p>
+  <div class="band" id="band">
+    <div data-z="supply" data-b="0"><b>급기</b><span>외기 도입구 → 급기팬</span></div>
+    <div data-z="flow" data-b="1"><b>공기 흐름·감지</b><span>제트팬 · CO 감지 · 제어반</span></div>
+    <div data-z="exhaust" data-b="2"><b>배기</b><span>배기팬 → 배기탑</span></div>
+    <div data-z="ev" data-b="3"><b>전기차 충전</b><span>분전반 → 충전기 → 차량</span></div>
+  </div>
+</header>
+
+<div class="stage">
+  <div class="view" id="view">
+    <canvas id="c" aria-label="지하주차장 환기와 전기차 충전설비 3D 모형"></canvas>
+    <div class="labels" id="labels"></div>
+    <div class="tools">
+      <button id="btnAll" type="button">전체 보기</button>
+      <button id="btnTour" type="button" aria-pressed="false">자동 투어</button>
+      <button id="btnTags" type="button" aria-pressed="true">이름표</button>
+    </div>
+    <div class="legend">
+      <span style="--c:var(--fresh)">신선 공기</span>
+      <span style="--c:var(--exh)">배기·오염 공기</span>
+      <span style="--c:var(--power)">충전 전력</span>
+      <span style="--c:var(--sense)">감지·신호</span>
+      <span style="--c:var(--fire)">화재 안전</span>
+    </div>
+    <div class="hint">← → 키로 단계 이동</div>
+  </div>
+  <aside class="panel" id="panel" aria-live="polite">
+    <div class="ph">
+      <div class="progress" id="progress"></div>
+      <div class="meta"><span class="mono" id="pNum">01 / 13</span><span class="pill" id="pZone">신선 공기</span></div>
+      <h3 id="pTitle"></h3>
+      <div class="abbr" id="pAbbr"></div>
+      <div class="en" id="pEn"></div>
+    </div>
+    <div class="pb" id="pBody"></div>
+    <div class="nav">
+      <button type="button" id="prev">이전</button>
+      <small id="navHint"></small>
+      <button type="button" class="next" id="next">다음</button>
+    </div>
+  </aside>
+</div>
+
+<section class="sld">
+  <h2>계통도로 다시 보기</h2>
+  <p class="note">왼쪽은 공기가, 오른쪽은 충전 전력이 지나가는 순서입니다. 점선은 감시·제어 신호나 배치·안전 관계를 뜻합니다. 칸을 누르면 위 3D 모형이 해당 설비로 이동합니다.</p>
+  <div class="scroll"><svg id="sld" viewBox="0 0 1060 250" role="img" aria-label="지하주차장 환기 계통과 전기차 충전 계통도"></svg></div>
+</section>
+
+<div class="two">
+  <section class="box">
+    <h2>점검 주기 한눈에 보기</h2>
+    <div class="tbl"><table>
+      <thead><tr><th>주기</th><th>무엇을</th><th>어디서</th></tr></thead>
+      <tbody>
+        <tr><td>매일</td><td>환기 제어반 운전 상태·알람, CO 농도 표시값 확인. 충전 구역 순찰(연기·탄내·이상 소음, 케이블 바닥 방치), 열화상 CCTV 화면과 알람 이력 확인</td><td>제어반·방재실·충전 구역</td></tr>
+        <tr><td>매월</td><td>자동·수동 선택과 타이머 설정 확인, 제트팬·배기팬 소음·진동, 충전기 외관·커넥터·비상정지 버튼, 질식소화포 보관함 상태와 위치 표지</td><td>주차장·팬룸</td></tr>
+        <tr><td>분기</td><td>CO 감지기 동작 확인(업체 점검 또는 시험 가스), 급기구·배기탑 루버와 방충망 청소, 충전 전력량과 전기요금 정산 대조</td><td>주차장·지상 급배기구·관리사무소</td></tr>
+        <tr><td>반기</td><td>팬 벨트·베어링·방진장치 정비, 소방 점검 때 환기팬 연동 정지(또는 제연 운전) 시험, 충전 분전반 열화상 점검과 누전차단기 시험</td><td>팬룸·제어반·분전반</td></tr>
+        <tr><td>매년</td><td>CO 감지기 교정·교체 주기 확인(제조사 기준), 팬 모터·충전설비 절연저항, 충전사업자 계약의 유지보수·정산 조항 이행 여부</td><td>팬룸·전기실·계약서</td></tr>
+        <tr><td>수시</td><td>충전시설 설치 의무와 지하주차장 전기차 화재 안전 기준의 최신 개정·정부 대책 확인</td><td>지자체·관련 부처 안내</td></tr>
+      </tbody>
+    </table></div>
+    <div class="safety"><span class="lead">지하주차장 전기차 화재 초기 대응</span><b>① 119 신고·안내방송</b><span>→</span><b>② 대피 유도·출차 통제</b><span>→</span><b>③ 충전 전원 차단(가능할 때만)</b><span>→</span><b>④ 무리한 접근 금지 · 질식소화포는 훈련된 인원만</b><span>→</span><b>⑤ 소방대 안내(층·위치·충전기 번호)</b></div>
+  </section>
+  <section class="box">
+    <h2>약어 풀이</h2>
+    <dl id="gloss"></dl>
+  </section>
+</div>
+
+<footer>교육용 일반 구성 모형입니다. 단지마다 환기 방식(덕트·무덕트, 기계 급기·자연 급기), 소방 연동 방식, 충전기 대수·운영 방식이 다르므로 실제 관리는 해당 단지의 설계도서와 계약서를 따르세요. 충전시설 설치 의무와 전기차 화재 안전 기준은 최근 정부 대책에 따라 자주 바뀌는 분야이니 반드시 최신 기준을 관할 지자체·관련 부처 안내로 확인하세요. 충전 전원의 출발점인 변압기·저압반은 수전 편, 감지기·수신기·스프링클러는 소방 편에서 다룹니다.</footer>
+</div>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/controls/OrbitControls.js"></script>
+<script>
+(function(){
+"use strict";
+// ───────── 단계 데이터 ─────────
+const ZONE = {fresh:{n:"신선 공기",c:"var(--fresh)"}, exh:{n:"배기",c:"var(--exh)"}, power:{n:"충전 전력",c:"var(--power)"}, sense:{n:"감지·신호",c:"var(--sense)"}, fire:{n:"화재 안전",c:"var(--fire)"}};
+const STEPS = [
+{n:1,t:"외기 도입구 · 급기팬",a:"지상 급기구(루버) · 급기 샤프트 · 급기팬 또는 자연 급기",z:"fresh",band:[0],tag:"급기",
+ role:"지하주차장에는 자동차 배기가스(일산화탄소·질소산화물·미세먼지)가 쌓이기 때문에 바깥 공기를 계속 들여오고 더러워진 공기를 내보내야 합니다. 급기는 그 첫 단계입니다. 지상 급기구에서 샤프트를 타고 내려온 외기를 급기팬으로 밀어 넣는 기계 급기와, 차로 출입구·개구부로 자연스럽게 들어오게 하고 배기만 팬으로 하는 방식이 있습니다.",
+ easy:"방 환기할 때 한쪽 창문을 여는 것과 같습니다. 들어오는 구멍이 있어야 나가는 쪽 팬도 제 역할을 합니다.",
+ field:"단지 화단이나 녹지 한쪽에 루버(빗살 창)가 달린 낮은 구조물이 급기구입니다. 지하에서는 그 아래 벽면에 사각 덕트와 원통형 또는 상자형 급기팬이 보입니다. 자연 급기 단지는 차로 램프와 채광·환기용 개구부가 그 역할을 합니다.",
+ manage:["급기구 앞에 화분·적치물·낙엽·눈이 쌓여 막히지 않게 합니다.","방충망·필터의 먼지 막힘을 청소합니다.","급기구 옆에 분리수거장·흡연 장소를 두지 않습니다. 오염 공기가 그대로 빨려 들어갑니다.","배기탑과 너무 가까우면 내보낸 공기가 다시 들어오므로 위치 관계를 도면으로 확인해 둡니다."],
+ fault:"급기팬만 멈추고 배기팬은 돌면 주차장 안이 음압이 되어 출입문이 무겁고 램프 쪽에서 바람이 세게 들어옵니다. 팬 운전 표시와 과부하 트립 여부를 확인합니다."},
+{n:2,t:"공기 흐름 · 제트팬과 덕트 방식",a:"무덕트 유인팬(제트팬) 방식 ↔ 덕트 방식",z:"fresh",band:[1],tag:"제트팬",
+ role:"덕트 방식은 천장에 큰 철판 덕트를 깔고 급·배기구를 여러 곳에 두어 공기를 고르게 넣고 뺍니다. 무덕트 방식은 천장에 매단 제트팬(유인팬)이 공기를 한 방향으로 밀어 급기 쪽에서 배기 쪽으로 ‘바람길’을 만듭니다. 덕트가 없어 층고를 덜 차지하고 시공이 간단해 최근 단지에서 많이 씁니다.",
+ easy:"덕트 방식은 집 안 곳곳에 송풍구를 낸 것이고, 제트팬 방식은 큰 선풍기를 줄지어 세워 바람을 한쪽으로 몰아가는 것입니다.",
+ field:"차로 위 천장에 원통형 팬이 일정한 간격으로 같은 방향을 보고 매달려 있습니다. 덕트 방식 단지는 천장을 따라 사각 덕트와 그릴이 길게 이어집니다. 모형의 화살표는 급기구에서 배기팬 쪽으로 가는 공기 흐름입니다.",
+ manage:["매달림 볼트·방진 고무·안전 와이어의 풀림을 점검합니다. 떨어지면 차량과 사람이 다칩니다.","날개와 보호망의 먼지·기름때를 청소합니다.","바람 방향(정회전·역회전) 설정이 설계 흐름과 같은지 확인합니다.","차량 높이 제한 표지와 팬 아래 여유 높이를 확인합니다."],
+ fault:"한두 대만 멈춰도 그 구간 공기가 고여 CO 농도가 오르고 냄새 민원이 생깁니다. 이상 진동이나 금속음이 나면 바로 멈추고 점검합니다."},
+{n:3,t:"일산화탄소(CO) 감지기",a:"CO 감지기 · 주차 구역별 분산 설치 · ppm 표시",z:"sense",band:[1],tag:"CO",
+ role:"자동차 배기가스 속 일산화탄소 농도를 재서 환기 제어반으로 보냅니다. 일산화탄소는 색도 냄새도 없어 사람이 알아채기 어렵기 때문에 감지기가 대신 지켜봅니다. 주차장 곳곳의 값을 모아 팬을 켜고 끄는 기준으로 씁니다.",
+ easy:"주차장의 ‘코’입니다. 배기가스가 많아지면 제어반에 ‘환기해 달라’고 알립니다.",
+ field:"기둥이나 벽에 붙은 작은 상자(숫자 표시창이 있기도 함)입니다. 측정값은 ppm 단위로 표시되고, 제어반이나 방재실 화면에서 구역별 값을 함께 볼 수 있습니다. 설치 높이와 간격은 설계마다 다릅니다.",
+ manage:["센서 수명과 교정 주기(제조사 기준)를 대장에 적고 지킵니다.","감지기 표시값과 제어반 화면 값이 같은지 가끔 대조합니다.","바닥 물청소 때 물이 튀거나, 주차 차량에 부딪히지 않게 보호합니다."],
+ fault:"감지기가 고장 나면 값이 0이나 최대값에 고정되어 팬이 아예 안 돌거나 계속 돕니다. 의심되면 타이머·수동 운전으로 바꿔 두고 교체합니다."},
+{n:4,t:"환기 제어반 자동운전",a:"환기 제어반 · CO 설정값 기동·정지 · 타이머 병행 · 자동/수동",z:"sense",band:[0,1,2],tag:"제어반",
+ role:"CO 농도가 설정값을 넘으면 팬을 켜고, 충분히 내려가면 끕니다. 차량 출입이 몰리는 출퇴근 시간대에는 타이머로 미리 돌리는 방식을 함께 씁니다. 공기질과 전기요금 사이에서 균형을 맞추는 두뇌 역할입니다.",
+ easy:"에어컨의 ‘자동 모드’와 같습니다. 온도 대신 CO 농도를 보고 팬을 켜고 끕니다.",
+ field:"주차장 한쪽 벽이나 기계실·전기실에 있는 제어반입니다. 자동·수동·정지 선택 스위치, 팬별 운전·고장 표시등, 설정 화면이 있고, 방재실에서 원격으로 상태를 보기도 합니다.",
+ manage:["기동·정지 농도 설정값과 타이머 시간대를 기록해 두고, 바꾸면 이유와 날짜를 남깁니다.","정지 값을 기동 값보다 충분히 낮게 두어 팬이 너무 자주 켜졌다 꺼지지 않게 합니다.","점검 후 ‘수동’이나 ‘정지’로 둔 채 잊지 않도록 마감 확인 항목에 넣습니다.","팬별 운전시간을 적어 전기요금 변화와 고장 징후를 함께 봅니다."],
+ fault:"팬 과부하로 트립되면 원인(벨트·베어링·이물질)을 확인한 뒤 리셋합니다. 방재실 표시와 현장 상태가 다르면 신호선이나 통신을 점검합니다."},
+{n:5,t:"배기팬",a:"배기팬(대형 송풍기) · 댐퍼 · 소음기 · 팬룸",z:"exh",band:[2],tag:"배기팬",
+ role:"주차장 안의 오염된 공기를 빨아들여 배기 샤프트로 밀어냅니다. 제트팬이 몰아 온 공기를 받아 바깥으로 내보내는 마지막 동력입니다. 제연 겸용으로 설계된 단지는 화재 때 연기를 빼는 역할도 합니다.",
+ easy:"주방 레인지후드처럼 더러운 공기를 밖으로 뽑아내는 큰 환풍기입니다.",
+ field:"주차장 끝 팬룸이나 벽면에 큰 송풍기와 모터, 방진 스프링, 덕트 속 댐퍼, 소음기가 있습니다. 운전 중에는 바람 소리와 진동이 큽니다.",
+ manage:["벨트 장력·마모, 베어링 소음·발열, 방진 스프링 상태를 점검합니다.","모터 절연저항을 정기적으로 측정합니다.","댐퍼가 운전과 함께 제대로 열리는지 확인합니다.","팬룸 문은 잠가 두고 적치물을 두지 않습니다."],
+ fault:"배기팬이 멈추면 급기·제트팬이 돌아도 공기가 빠지지 않아 CO 농도가 계속 오릅니다. 제연 겸용 팬이라면 비상전원에 연결돼 있는지 도면으로 확인해 둡니다."},
+{n:6,t:"배기탑 · 지상 배기구",a:"배기 샤프트 · 지상 배기탑(루버) · 악취·소음 민원",z:"exh",band:[2],tag:"배기탑",
+ role:"배기 샤프트가 지상으로 올라와 오염 공기를 내보내는 출구입니다. 위치와 높이, 루버 방향에 따라 배기가스 냄새와 팬 소음이 주변 동이나 보행로로 향해 민원이 자주 생기는 곳입니다.",
+ easy:"주차장 공기가 밖으로 나가는 ‘굴뚝’입니다. 굴뚝 방향이 사람 쪽이면 불만이 생깁니다.",
+ field:"화단·놀이터·보행로 근처에 루버가 달린 콘크리트나 금속 구조물로 서 있습니다. 가까이 가면 운전 중 따뜻하고 매캐한 바람과 소음이 느껴집니다.",
+ manage:["루버·방충망의 막힘, 새 둥지, 쓰레기 투입을 확인합니다.","배기 바람이 보행자 얼굴 높이나 저층 세대 창으로 바로 향하는지 봅니다.","민원이 반복되면 운전 시간대 조정(야간 감속), 루버 각도·배기 방향 변경, 소음기·조경 차폐를 검토합니다.","민원 내용과 조치 결과를 기록해 둡니다."],
+ fault:"배기탑이 막히면 배기팬이 과부하로 멈추거나 환기량이 크게 줄어듭니다. 악취 민원이 급증하면 팬 운전 상태와 루버 막힘부터 확인합니다."},
+{n:7,t:"화재 시 소방 연동",a:"소방 수신기 신호 → 환기팬 정지 또는 제연 운전",z:"fire",band:[0,1,2],tag:"소방 연동",
+ role:"화재가 감지되면 소방 수신기가 환기 제어반에 신호를 보냅니다. 일반 환기팬은 연기가 퍼지지 않도록 멈추고, 제연 설비로 설계된 단지는 정해진 팬을 제연 운전으로 바꿉니다. 어떤 방식인지는 단지 설계마다 다릅니다. 소방설비 편의 수신기·감지기와 이어지는 지점입니다.",
+ easy:"불이 나면 선풍기로 연기를 휘젓지 않도록 소방 쪽에서 환기팬의 스위치를 대신 누르는 장치입니다.",
+ field:"환기 제어반 안의 소방 연동 단자·릴레이, 방재실 수신기의 연동 정지·복구 스위치가 그 흔적입니다. 모형의 붉은 선은 수신기에서 내려온 연동 신호입니다.",
+ manage:["소방시설 작동·종합점검 때 환기팬이 설계대로 멈추는지(또는 제연 운전하는지) 함께 확인합니다.","수신기의 연동 ‘정지’ 스위치는 점검이 끝나면 반드시 복구합니다.","비화재보가 잦다고 연동을 끊어 두지 않습니다. 원인 감지기를 정비합니다."],
+ fault:"비화재보로 환기팬이 멈췄다면 원인을 없앤 뒤 수신기를 복구하고, 환기팬이 다시 자동운전으로 돌아왔는지 현장에서 확인합니다."},
+{n:8,t:"충전 전원 · 전용 분전반",a:"저압반(수전 편) → 충전기 전용 분전반 · 차단기 · 누전차단기",z:"power",band:[3],tag:"EV 분전반",
+ role:"충전기 전력은 수전설비 편의 변압기 → 저압반에서 출발해 충전기 전용 분전반을 거쳐 각 충전기로 갑니다. 충전기는 한 대가 오래, 여러 대가 동시에 전기를 쓰므로 증설 전에 변압기 여유 용량을 꼭 확인해야 합니다. 여유가 모자라면 충전사업자가 별도로 전기를 받아(별도 수전) 설치하기도 합니다.",
+ easy:"충전기들만을 위한 ‘전용 두꺼비집’입니다. 그 뒤에는 아파트 전체 전기를 책임지는 변압기가 있습니다.",
+ field:"충전 구역 벽에 붙은 분전반 안에 충전기별 차단기, 누전차단기, 경우에 따라 전력량계가 있습니다. 전기실 저압반에는 ‘충전설비’ 표찰이 붙은 회로가 있습니다.",
+ manage:["충전기 증설 전에 여름·겨울 최대부하 기록으로 변압기 여유를 확인하고 전기안전관리자와 협의합니다.","분전반 단자 과열을 열화상으로 점검하고 누전차단기 시험 버튼을 정기적으로 눌러 봅니다.","분전반 앞에 차량·물건을 두지 않습니다(화재 때 차단해야 하는 곳입니다).","분전반 위치와 충전기 번호 대응표를 방재실에 비치합니다."],
+ fault:"여러 충전기가 한꺼번에 꺼지면 분전반 차단기 트립을 의심합니다. 누전으로 떨어졌다면 원인 확인 전에 함부로 다시 올리지 말고 운영사·전기안전관리자에게 알립니다."},
+{n:9,t:"완속충전기",a:"완속충전기(EVSE) · AC · 대체로 7kW 안팎",z:"power",band:[3],tag:"완속",
+ role:"교류(AC) 전기를 차에 넘겨 주고, 차 안의 충전 장치가 배터리를 채웁니다. 출력이 대체로 7kW 안팎이라 완전히 채우는 데 몇 시간이 걸려, 밤새 세워 두는 아파트에 가장 흔한 형태입니다.",
+ easy:"휴대폰을 밤새 천천히 충전하는 것처럼, 오래 세워 두며 채우는 충전기입니다.",
+ field:"벽부형이나 스탠드형 본체에 화면, 회원카드 태그부, 커넥터와 케이블 거치대가 있습니다. 국내 완속은 대체로 AC 5핀 커넥터를 씁니다. 바닥은 충전구역 표시로 칠해져 있습니다.",
+ manage:["케이블 피복 손상, 커넥터 변색·탄 흔적, 케이블이 바닥에 늘어져 차에 밟히는지 확인합니다.","화면 오류, 비상정지 버튼, 거치대 상태를 순찰 때 봅니다.","충전을 마친 차량의 장시간 점유, 일반 차량 주차는 충전 방해행위가 될 수 있으므로 안내문으로 알립니다."],
+ fault:"‘충전이 안 된다’는 민원은 오류 코드와 충전기 번호를 기록해 운영사 고객센터로 넘깁니다. 커넥터 과열·탄내가 나면 즉시 사용을 멈추고 전원을 차단합니다."},
+{n:10,t:"급속충전기 · 콘센트형 충전",a:"급속충전기(DC) · 과금형 콘센트(휴대용 충전 케이블)",z:"power",band:[3],tag:"급속",
+ role:"급속충전기는 충전기 안에서 교류를 직류(DC)로 바꿔 배터리에 바로 넣기 때문에 수십 분 안에 상당량을 채웁니다. 대신 전력이 커서 변압기와 계약전력에 부담이 큽니다. 콘센트형(과금형 콘센트)은 벽·기둥 콘센트에 과금 기능을 붙여 휴대용 충전 케이블을 꽂아 쓰는 방식으로, 설치비가 낮고 속도는 가장 느립니다.",
+ easy:"급속은 ‘고속 충전기’, 콘센트형은 ‘주차하면서 꽂아 두는 멀티탭’에 가깝습니다.",
+ field:"급속은 사람 키만 한 캐비닛형 본체와 굵고 무거운 DC 콤보 케이블, 냉각팬 소리가 특징입니다. 과금형 콘센트는 기둥에 붙은 작은 상자에 태그부가 있습니다.",
+ manage:["급속충전기는 냉각팬 필터·흡배기구 막힘, 케이블 무게로 인한 커넥터 손상을 점검합니다.","과금형 콘센트에는 전기차 충전 외의 가전·연장선 연결을 금지하고 전용 회로인지 확인합니다.","지하 급속충전기 신규 설치는 화재 위험 때문에 위치를 신중히 검토합니다(12·13단계)."],
+ fault:"급속 충전 중 이상 소리·연기가 나면 비상정지 버튼으로 멈추고 사람을 멀리한 뒤 운영사와 관리사무소에 알립니다."},
+{n:11,t:"과금·통신 · 부하관리 · 운영 방식",a:"통신(OCPP 등) · 회원 인증·결제 · 로드밸런싱 · CPO 운영 ↔ 단지 직접 운영",z:"sense",band:[3],tag:"과금·통신",
+ role:"충전기는 통신망으로 운영 서버에 연결되어 회원 인증, 요금 결제, 고장 감시를 합니다. 부하관리(로드밸런싱)는 여러 대가 동시에 충전할 때 정해진 전력 한도 안에서 나눠 주어 변압기 과부하를 막습니다. 운영은 충전사업자(CPO)가 설치·운영하고 단지는 장소를 제공하는 방식과, 단지가 직접 설치·운영하는 방식으로 나뉩니다.",
+ easy:"충전기마다 붙은 ‘계산대와 교통정리원’입니다. 누가 얼마나 썼는지 적고, 한꺼번에 몰리면 나눠 줍니다.",
+ field:"충전기 화면의 카드·앱 결제, 분전반 옆 통신함(모뎀), 운영사 콜센터 번호 스티커가 보입니다. 사업자 운영이면 대개 사업자 전용 전력량계가 따로 있고, 단지 공용 전기에서 나가면 관리사무소가 사용량을 정산합니다.",
+ manage:["계약서에서 유지보수 책임, 고장 처리 기한, 전기요금 정산 방식(별도 계량 또는 공용 전기 차감), 계약 종료 후 설비 소유·철거 조건을 확인합니다.","충전 전기가 공용 전기에 섞여 있으면 매월 충전기 사용량과 정산 금액을 대조합니다.","충전기 설치·운영 계약이 입주자대표회의 의결 사항인지 관리규약으로 확인합니다."],
+ fault:"통신이 끊기면 결제가 안 되거나 기록이 남지 않습니다. 운영사에 신고하고, 정산 차이가 나면 계량값과 운영사 사용 내역을 대조합니다."},
+{n:12,t:"설치 의무 · 충전 구역 배치",a:"친환경자동차법 충전시설 설치 의무 · 전용주차구역 · 위치 선정",z:"power",band:[3],tag:"의무·배치",
+ role:"친환경자동차법(환경친화적 자동차의 개발 및 보급 촉진에 관한 법률)에 따라 일정 규모 이상 공동주택은 전기차 충전시설과 전용주차구역을 갖춰야 합니다. 의무 비율과 이행 기한은 신축·기축에 따라 다르고 지자체 조례로 정하는 부분도 있습니다. 화재 대응을 생각하면 충전 구역은 지상이나 지하 출입구·램프 가까운 곳, 소방대가 접근하기 쉬운 곳이 권장됩니다.",
+ easy:"‘몇 대를 놓아야 하는가’는 법이 정하고, ‘어디에 놓아야 안전한가’는 단지가 잘 골라야 합니다.",
+ field:"충전 구역 바닥 도색과 전용주차구역 안내 표지, 천장의 충전구역 표지판이 보입니다. 모형에서는 충전 구역을 차로 램프(출입구) 가까운 쪽에 두었습니다.",
+ manage:["우리 단지의 의무 대수와 이행 기한을 지자체 담당 부서에 확인합니다. 최근 정부 대책으로 기준이 바뀌는 분야이므로 최신 기준을 확인합니다.","신규 배치·증설 때는 지상 또는 출입구 가까운 곳을 우선 검토하고 소방·전기 측면을 함께 협의합니다.","전용주차구역의 일반 차량 주차·물건 적치를 안내·관리합니다.","충전 구역 위치도를 방재실과 소방서 안내 자료에 넣어 둡니다."],
+ fault:"의무를 지키지 못하면 행정 제재가 있을 수 있으니 지연 사유와 계획을 지자체와 미리 협의합니다. 주민 간 주차 갈등은 관리규약·주차 규정으로 기준을 정해 대응합니다."},
+{n:13,t:"전기차 화재 안전",a:"열폭주 · 과충전 방지 충전기 · 열화상 CCTV · 스프링클러 · 질식소화포 · 이동식 수조",z:"fire",band:[3],tag:"화재 안전",
+ role:"리튬이온 배터리는 충격·결함·과충전 등으로 셀 하나가 과열되면 옆 셀로 연쇄적으로 번지는 열폭주가 일어날 수 있습니다. 불이 오래가고 꺼진 뒤에도 다시 붙을 수 있으며 유독가스가 많아 일반 소화기로 끄기 어렵습니다. 그래서 예방(과충전 방지 충전기), 조기 감지(열화상·불꽃 감지 CCTV), 확산 억제(스프링클러, 질식소화포), 진압 보조(이동식 수조)를 함께 갖춥니다.",
+ easy:"배터리 불은 ‘한 번 붙으면 오래 가는 불’입니다. 미리 막고, 빨리 알아채고, 번지지 않게 하는 것이 핵심입니다.",
+ field:"충전 구역 천장의 열화상 카메라와 스프링클러 헤드, 벽의 질식소화포 보관함, 이동식 수조(접이식 차단막·수조)가 보입니다. 과충전 방지 충전기는 차량 배터리 정보(BMS·SOC)를 받아 충전량을 제한하는 기능이 있는 충전기입니다.",
+ manage:["질식소화포는 훈련된 인원만 쓰도록 하고 사용 교육과 보관 위치 표지를 유지합니다.","스프링클러 헤드를 가리거나 충전 구역 위에 물건을 매달지 않습니다.","열화상 CCTV 알람이 방재실로 들어오는지, 야간에도 확인 가능한지 점검합니다.","과충전 방지 기능 충전기로의 교체·지원 사업, 정부 대책의 변경 사항을 수시로 확인합니다."],
+ fault:"연기·불꽃을 보면 아래 ‘전기차 화재 초기 대응’ 순서를 따릅니다. 진압은 소방대에 맡기고, 관리사무소는 신고·대피·전원 차단·안내에 집중합니다."}
+];
+const N = STEPS.length;
+const GLOSS = [["CO","일산화탄소","Carbon Monoxide"],["ppm","백만분율(농도 단위)","Parts Per Million"],["EV","전기자동차","Electric Vehicle"],["EVSE","전기차 충전설비","Electric Vehicle Supply Equipment"],["AC","교류","Alternating Current"],["DC","직류","Direct Current"],["kW","킬로와트(전력 단위)","Kilowatt"],["ELB","누전차단기","Earth Leakage Breaker"],["CPO","충전사업자(충전소 운영자)","Charge Point Operator"],["OCPP","충전기와 운영 서버 사이 통신 규약","Open Charge Point Protocol"],["BMS","배터리 관리 시스템","Battery Management System"],["SOC","배터리 충전 상태(%)","State of Charge"],["CCTV","폐쇄회로 카메라","Closed-Circuit Television"]];
+const EN = Object.fromEntries(GLOSS.map(g=>[g[0],g[2]]));
+const STEP_EN = {1:["Fresh Air Intake","Supply Fan","Natural Supply"],2:["Jet Fan (Induction Fan)","Ductless Ventilation","Ducted Ventilation"],3:["CO","Gas Detector","ppm"],4:["Ventilation Control Panel","CO Setpoint","Timer Operation"],5:["Exhaust Fan","Damper","Silencer"],6:["Exhaust Shaft","Exhaust Tower","Louver"],7:["Fire Alarm Interlock","Fan Stop","Smoke Control Mode"],8:["EV Charger Distribution Board","ELB","Transformer Capacity"],9:["Slow Charger","EVSE","AC","kW"],10:["Fast Charger","DC","Smart Outlet Charger"],11:["CPO","OCPP","Load Balancing","Billing"],12:["Charging Facility Mandate","EV-Only Parking Zone","Siting"],13:["Thermal Runaway","Fire Blanket","Portable Water Tank","BMS","SOC","CCTV"]};
+function enLine(n){return (STEP_EN[n]||[]).map(k=>EN[k]?`${k} (${EN[k]})`:k).join(" · ");}
+
+// ───────── 패널·내비 ─────────
+const $ = s => document.querySelector(s);
+let cur = 1;
+const prog = $("#progress");
+prog.style.setProperty("--n", N);
+STEPS.forEach(s=>{const b=document.createElement("button");b.type="button";b.setAttribute("aria-label",s.n+"단계 "+s.t);b.style.setProperty("--c",ZONE[s.z].c);b.onclick=()=>select(s.n);prog.appendChild(b);});
+$("#gloss").innerHTML = GLOSS.map(g=>`<dt>${g[0]}</dt><dd>${g[1]} <span class="en">${g[2]}</span></dd>`).join("");
+
+function renderPanel(){
+  const s = STEPS[cur-1], z = ZONE[s.z];
+  const panel = $("#panel"); panel.style.setProperty("--c", z.c);
+  $("#pNum").textContent = String(s.n).padStart(2,"0")+" / "+String(N).padStart(2,"0");
+  $("#pZone").textContent = z.n; $("#pZone").style.setProperty("--c", z.c);
+  $("#pTitle").textContent = s.t; $("#pAbbr").textContent = s.a; $("#pEn").textContent = enLine(s.n);
+  $("#pBody").innerHTML =
+    `<section><h4>역할</h4><p>${s.role}</p></section>
+     <section class="easy"><h4>쉽게 말하면</h4><p>${s.easy}</p></section>
+     <section><h4>현장에서는</h4><p>${s.field}</p></section>
+     <section><h4>관리 포인트</h4><ul>${s.manage.map(m=>`<li>${m}</li>`).join("")}</ul></section>
+     <section class="fault"><h4>고장·사고 시</h4><p>${s.fault}</p></section>`;
+  $("#pBody").scrollTop = 0;
+  [...prog.children].forEach((b,i)=>{b.classList.toggle("on",i+1===cur);b.classList.toggle("done",i+1<cur);b.style.setProperty("--c",ZONE[STEPS[i].z].c);});
+  $("#prev").disabled = cur===1; $("#next").textContent = cur===N ? "처음으로" : "다음";
+  $("#navHint").textContent = cur<N ? "다음: "+STEPS[cur].t : "";
+  document.querySelectorAll("#band div").forEach(d=>d.classList.toggle("on", s.band.includes(+d.dataset.b)));
+  document.querySelectorAll("#sld .node").forEach(g=>g.classList.toggle("on", +g.dataset.n===cur));
+  document.querySelectorAll(".tag").forEach(t=>{t.classList.toggle("on",+t.dataset.n===cur);});
+}
+$("#prev").onclick=()=>{stopTour(); if(cur>1) select(cur-1);};
+$("#next").onclick=()=>{stopTour(); select(cur===N?1:cur+1);};
+document.addEventListener("keydown",e=>{
+  if(e.target.closest && e.target.closest("input,textarea,select")) return;
+  if(e.key==="ArrowRight"){stopTour(); select(cur===N?1:cur+1);} else if(e.key==="ArrowLeft"&&cur>1){stopTour(); select(cur-1);}
+});
+
+// ───────── 2D 계통도 ─────────
+(function buildSLD(){
+  const svg = $("#sld");
+  const X={1:70,2:205,5:340,6:475,3:140,4:275,7:410,8:640,9:780,10:920,11:710,12:850,13:990};
+  const Y={}; [1,2,5,6,8,9,10].forEach(n=>Y[n]=62); [3,4,7,11,12,13].forEach(n=>Y[n]=185);
+  const zc = n=>ZONE[STEPS[n-1].z].c;
+  let h="";
+  const seg=(x1,y1,x2,y2,c,dash)=>`<line x1="${x1}" y1="${y1}" x2="${x2}" y2="${y2}" stroke="${c}" stroke-width="2.6" ${dash?'stroke-dasharray="5 4"':''}/>`;
+  const arrow=(x,y,c)=>`<path d="M${x-7} ${y-5} L${x} ${y} L${x-7} ${y+5}" fill="none" stroke="${c}" stroke-width="2"/>`;
+  // 구간 머리글
+  h+=`<text x="272" y="20" text-anchor="middle" class="hd">환기 계통</text><text x="815" y="20" text-anchor="middle" class="hd">전기차 충전 계통</text>`;
+  h+=`<line x1="548" y1="8" x2="548" y2="240" stroke="var(--line)" stroke-dasharray="3 3"/>`;
+  // 공기 흐름: 급기 → 제트팬 → 배기팬 → 배기탑 → 대기
+  h+=seg(X[1]+37,62,X[2]-37,62,"var(--fresh)");
+  h+=seg(X[2]+37,62,X[5]-37,62,"var(--exh)");
+  h+=seg(X[5]+37,62,X[6]-37,62,"var(--exh)");
+  h+=seg(X[6]+37,62,X[6]+58,62,"var(--exh)")+arrow(X[6]+60,62,"var(--exh)");
+  h+=`<text x="${X[6]+52}" y="50" text-anchor="middle" class="nm">대기</text>`;
+  // CO 감지 → 제어반 → 팬 제어(점선)
+  h+=seg(X[3]+37,185,X[4]-37,185,"var(--sense)");
+  h+=seg(X[4],165,X[4],118,"var(--sense)",true);
+  h+=seg(X[1],118,X[5],118,"var(--sense)",true);
+  [1,2,5].forEach(n=>{h+=seg(X[n],118,X[n],82,"var(--sense)",true);});
+  // 소방 연동 → 제어반
+  h+=seg(X[7]-37,185,X[4]+37,185,"var(--fire)");
+  h+=`<text x="${X[7]}" y="152" text-anchor="middle" class="nm">← 소방 수신기</text>`;
+  // 충전 전력: 저압반 → 분전반 → 완속 → 급속
+  h+=seg(X[8]-74,62,X[8]-37,62,"var(--power)")+`<text x="${X[8]-62}" y="44" text-anchor="middle" class="nm">저압반</text><text x="${X[8]-62}" y="88" text-anchor="middle" class="nm">(수전 편)</text>`;
+  h+=seg(X[8]+37,62,X[9]-37,62,"var(--power)");
+  h+=seg(X[9]+37,62,X[10]-37,62,"var(--power)");
+  // 과금·통신 ↔ 충전기
+  h+=seg(X[11],165,X[11],118,"var(--sense)",true)+seg(X[11],118,X[9],118,"var(--sense)",true)+seg(X[9],118,X[9],82,"var(--sense)",true);
+  // 배치 의무 → 충전 구역
+  h+=seg(X[12],165,X[12],62,"var(--power)",true);
+  // 화재 안전 → 충전기
+  h+=seg(X[13],165,X[13],118,"var(--fire)",true)+seg(X[13],118,X[10],118,"var(--fire)",true)+seg(X[10],118,X[10],82,"var(--fire)",true);
+  const AB={1:"급기",2:"제트팬",3:"CO",4:"제어반",5:"배기팬",6:"배기탑",7:"소방 연동",8:"EV 분전반",9:"완속",10:"급속",11:"과금·통신",12:"의무·배치",13:"화재 안전"};
+  const NM={1:"외기 도입",2:"유인팬·덕트",3:"CO 감지기",4:"자동운전",5:"기계 배기",6:"지상 배기구",7:"팬 정지·제연",8:"전용 분전반",9:"7kW 안팎(AC)",10:"DC·콘센트형",11:"부하관리·운영",12:"설치 의무",13:"열폭주 대비"};
+  for(let n=1;n<=N;n++){
+    h+=`<g class="node" data-n="${n}" style="--c:${zc(n)}" tabindex="0" role="button" aria-label="${n}단계 ${STEPS[n-1].t}">
+      <rect x="${X[n]-37}" y="${Y[n]-20}" width="74" height="40" rx="6"/>
+      <circle cx="${X[n]-37}" cy="${Y[n]-20}" r="9" fill="${zc(n)}"/><text x="${X[n]-37}" y="${Y[n]-16.5}" text-anchor="middle" class="num">${n}</text>
+      <text x="${X[n]}" y="${Y[n]+4.5}" text-anchor="middle" class="ab">${AB[n]}</text>
+      <text x="${X[n]}" y="${Y[n]+37}" text-anchor="middle" class="nm">${NM[n]}</text></g>`;
+  }
+  svg.innerHTML=h;
+  svg.querySelectorAll(".node").forEach(g=>{
+    const go=()=>{stopTour();select(+g.dataset.n);document.querySelector(".stage").scrollIntoView({behavior:matchMedia("(prefers-reduced-motion: reduce)").matches?"auto":"smooth",block:"start"});};
+    g.addEventListener("click",go); g.addEventListener("keydown",e=>{if(e.key==="Enter"||e.key===" "){e.preventDefault();go();}});
+  });
+})();
+
+// ───────── 3D ─────────
+const REDUCE = matchMedia("(prefers-reduced-motion: reduce)").matches;
+const view = $("#view"), canvas = $("#c"), labelsEl = $("#labels");
+let three = null;
+let tour = null;
+function stopTour(){ if(tour){clearInterval(tour);tour=null;$("#btnTour").setAttribute("aria-pressed","false");$("#btnTour").textContent="자동 투어";} }
+
+function select(n, opts){
+  cur = n; renderPanel();
+  try{ history.replaceState(null,"","#s"+n); }catch(e){}
+  if(three) three.focus(n, opts);
+}
+
+function init3D(){
+  if(!window.THREE || !THREE.OrbitControls) throw new Error("three");
+  const V = (x,y,z)=>new THREE.Vector3(x,y,z);
+  const renderer = new THREE.WebGLRenderer({canvas, antialias:true});
+  renderer.setPixelRatio(Math.min(window.devicePixelRatio||1, 2));
+  renderer.shadowMap.enabled = true; renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+  const scene = new THREE.Scene();
+  const camera = new THREE.PerspectiveCamera(40, 1, 0.1, 600);
+  const controls = new THREE.OrbitControls(camera, canvas);
+  controls.enableDamping = true; controls.dampingFactor = .08; controls.maxDistance = 220; controls.minDistance = 3;
+  controls.maxPolarAngle = Math.PI*0.62;
+
+  scene.add(new THREE.HemisphereLight(0xffffff, 0x8a8f86, .8));
+  const sun = new THREE.DirectionalLight(0xffffff, .8);
+  sun.position.set(-30, 70, 45); sun.castShadow = true;
+  sun.shadow.mapSize.set(2048,2048);
+  Object.assign(sun.shadow.camera,{left:-70,right:70,top:55,bottom:-55,near:10,far:220});
+  scene.add(sun);
+
+  const COL = {fresh:0x2ea3e0, exh:0x8f785f, power:0xf07c1a, sense:0x8a5cd0, fire:0xd23a2e};
+  const pickables = [], groups = {}, anchors = {}, doors = [], edgeMats = [];
+  for(let i=1;i<=N;i++){groups[i]=new THREE.Group();scene.add(groups[i]);}
+  const mat = (color,o={}) => new THREE.MeshStandardMaterial(Object.assign({color,roughness:.75,metalness:.08},o));
+  const glass = (color,op) => new THREE.MeshStandardMaterial({color,transparent:true,opacity:op,depthWrite:false,roughness:.3});
+  function mesh(geo,m,x,y,z){const o=new THREE.Mesh(geo,m);o.position.set(x||0,y||0,z||0);return o;}
+  function box(w,h,d,c,x,y,z,o){const m=mesh(new THREE.BoxGeometry(w,h,d),typeof c==="number"?mat(c,o):c,x,y,z);m.castShadow=true;m.receiveShadow=true;return m;}
+  function cyl(r1,r2,h,c,x,y,z,seg){const m=mesh(new THREE.CylinderGeometry(r1,r2,h,seg||18),typeof c==="number"?mat(c):c,x,y,z);m.castShadow=true;return m;}
+  function edges(obj,op){const l=new THREE.LineSegments(new THREE.EdgesGeometry(obj.geometry),new THREE.LineBasicMaterial({transparent:true,opacity:op||.55}));l.position.copy(obj.position);l.rotation.copy(obj.rotation);edgeMats.push(l.material);return l;}
+  function reg(step,obj,parent){(parent||groups[step]).add(obj);obj.traverse(o=>{if(o.isMesh){o.userData.step=step;pickables.push(o);}});return obj;}
+  function path(pts){const p=new THREE.CurvePath();for(let i=0;i<pts.length-1;i++)p.add(new THREE.LineCurve3(pts[i],pts[i+1]));return p;}
+  const flows=[];
+  // 입자만(관 없이): 전력·신호 흐름
+  function flow(pts,color,r,speed,gap){
+    const c=path(pts), len=c.getLength();
+    const k=Math.max(2,Math.round(len/(gap||2.2))), pm=new THREE.MeshBasicMaterial({color:new THREE.Color(color).lerp(new THREE.Color(0xffffff),.45)});
+    const geo=new THREE.SphereGeometry(r<.1?r*1.9:r*1.3,10,8);
+    for(let i=0;i<k;i++){const s=new THREE.Mesh(geo,pm);scene.add(s);flows.push({s,c,len,off:i/k,speed:speed||3});}
+    return c;
+  }
+  // 관(케이블) + 흐름 입자. noFlow면 관만
+  function cable(step,pts,color,r,speed,noFlow,gap){
+    r=r||.09;
+    const c=path(pts), len=c.getLength();
+    const tube=new THREE.Mesh(new THREE.TubeGeometry(c,Math.max(8,Math.round(len*3)),r,10,false),mat(color,{roughness:.5}));
+    tube.castShadow=true; reg(step,tube);
+    if(!noFlow) flow(pts,color,r,speed,gap);
+    return c;
+  }
+  const pipe=(step,pts,color,r)=>cable(step,pts,color,r,0,true);
+  // 공기 흐름: 진행 방향을 가리키는 화살표 입자
+  const UP=V(0,1,0), arrowGeo=new THREE.ConeGeometry(.17,.48,10);
+  function air(pts,color,speed,gap){
+    const c=path(pts), len=c.getLength(), k=Math.max(3,Math.round(len/(gap||1.5)));
+    const m=new THREE.MeshBasicMaterial({color:new THREE.Color(color).lerp(new THREE.Color(0xffffff),.25),transparent:true,opacity:.85});
+    for(let i=0;i<k;i++){const s=new THREE.Mesh(arrowGeo,m);scene.add(s);flows.push({s,c,len,off:i/k,speed:speed||2.4,dir:true});}
+  }
+
+  // ── 지상: 반투명 지면 ──
+  const groundMat = new THREE.MeshStandardMaterial({color:0xc2ccc5,transparent:true,opacity:.5,roughness:1,depthWrite:false});
+  const ground = mesh(new THREE.PlaneGeometry(150,110),groundMat,5,0,-5);
+  ground.rotation.x=-Math.PI/2; ground.receiveShadow=true; ground.renderOrder=2; scene.add(ground);
+
+  // ── 지하주차장 한 층 ──
+  const FY=-5.2, CY=-0.8, GH=CY-FY, GYC=(FY+CY)/2;
+  const garage=mesh(new THREE.BoxGeometry(60,GH,32),glass(0xc8cfd3,.08),0,GYC,0); garage.renderOrder=4; scene.add(garage); scene.add(edges(garage,.6));
+  const floor=box(60,.12,32,0x9ea39d,0,FY-.06,0); floor.castShadow=false; scene.add(floor);
+  // 기둥
+  [-20,-10,0,10,20].forEach(x=>[-10.5,10.5].forEach(z=>scene.add(box(.6,GH,.6,0xb6bab4,x,GYC,z))));
+  // 주차 칸 라인 · 차로 중앙선
+  const lineM=mat(0xf1f1ea,{roughness:1});
+  for(let k=0;k<23;k++){const x=-27.5+2.5*k;[-13.4,13.4].forEach(z=>{const l=box(.08,.012,5.2,lineM,x,FY+.006,z);l.castShadow=false;scene.add(l);});}
+  for(let x=-26;x<28;x+=4){const l=box(2,.012,.12,mat(0xe2b23a,{roughness:1}),x,FY+.006,0);l.castShadow=false;scene.add(l);}
+  // 차량(박스형)
+  function car(x,z,color){
+    const g=new THREE.Group(); g.position.set(x,FY,z);
+    g.add(box(1.8,.75,4.3,color,0,.625,0,{metalness:.25,roughness:.5}));
+    g.add(box(1.6,.55,2.2,0x2b343a,0,1.275,.2,{metalness:.3,roughness:.35}));
+    [[-.85,-1.4],[.85,-1.4],[-.85,1.4],[.85,1.4]].forEach(([wx,wz])=>{const w=cyl(.3,.3,.22,0x1e2224,wx,.3,wz,14);w.rotation.z=Math.PI/2;g.add(w);});
+    scene.add(g); return g;
+  }
+  const CARC=[0xd8dcdf,0x3d4f63,0x8e2f2a,0x2a2d30,0xa8adb0,0x5a6b4e];
+  [-23.75,-18.75,-13.75,-6.25,1.25,6.25,13.75,18.75].forEach((x,i)=>car(x,-13.2,CARC[i%6]));
+  [-23.75,-16.25,-3.75,3.75,8.75].forEach((x,i)=>car(x,13.2,CARC[(i+2)%6]));
+  car(16.25,13.2,0xf4f6f7); car(26.25,13.2,0x5f8fb8);  // 충전 중인 EV
+  // 차로 램프(출입구, 동쪽)
+  (function(){const L=Math.hypot(14,-FY),a=Math.atan2(-FY,14);const r=box(L,.25,5,0xa3a7a1,37,FY/2-.13,0);r.rotation.z=a;r.castShadow=false;scene.add(r);
+    [-2.6,2.6].forEach(z=>{const c=box(L,.35,.15,0x8c908b,37,FY/2+.05,z);c.rotation.z=a;scene.add(c);});})();
+  // 지상 나무
+  [[-38,10],[-37,-13],[14,27],[-8,24],[52,14]].forEach(([x,z])=>{scene.add(cyl(.18,.22,1.6,0x6b5a45,x,.8,z,8));scene.add(mesh(new THREE.SphereGeometry(1.3,12,10),mat(0x5f9a5c),x,2.3,z));});
+  // 아파트 동 일부(반투명)
+  const BX=34,BZ=-22,BW=20,BD=8,FL=10,FH=2.8;
+  const bld=mesh(new THREE.BoxGeometry(BW,FL*FH,BD),glass(0xd5d9dc,.08),BX,FL*FH/2,BZ); bld.renderOrder=6; scene.add(bld); scene.add(edges(bld,.7));
+  const slabM=glass(0xc0c6ca,.16);
+  for(let f=1;f<=FL;f++){const s=mesh(new THREE.BoxGeometry(BW,.1,BD),slabM,BX,f*FH,BZ);s.renderOrder=4;scene.add(s);}
+
+  // 함(큐비클): 문 열림 재사용. ry로 방향 회전
+  const PANEL=0xb7b5a8;
+  function cubicle(step,x,z,w,ry,inner,front){
+    const g=new THREE.Group(); g.position.set(x,FY,z); g.rotation.y=ry||0;
+    const h=3,d=1.6;
+    g.add(box(w,h,.06,PANEL,0,h/2+.12,-d/2)); g.add(box(.06,h,d,PANEL,-w/2,h/2+.12,0)); g.add(box(.06,h,d,PANEL,w/2,h/2+.12,0));
+    g.add(box(w,.06,d,PANEL,0,h+.12,0)); g.add(box(w,.14,d,0x6e706a,0,.07,0));
+    if(inner) inner(g);
+    const pivot=new THREE.Group(); pivot.position.set(-w/2,0,d/2+.03); g.add(pivot);
+    const door=box(w-.02,h-.04,.05,PANEL,w/2,h/2+.12,0); pivot.add(door);
+    pivot.add(box(.05,.3,.08,0x333333,w-.18,1.6,.05));
+    if(front) front(pivot,w);
+    doors.push({pivot,step,a:0});
+    reg(step,g); return g;
+  }
+  const lamp=(p,x,y,c)=>{p.add(mesh(new THREE.SphereGeometry(.07,10,8),mat(c,{emissive:c,emissiveIntensity:.6}),x,y,.06));};
+  const lcd=(p,x,y)=>{p.add(box(.6,.4,.08,0x23272a,x,y,.06));p.add(box(.46,.22,.02,0x5fd08a,x,y+.03,.11,{emissive:0x1f7a44}));};
+  // 원통형 팬(축이 x 방향)
+  function fanX(step,x,y,z,r,l,c){const f=cyl(r,r,l,c,x,y,z,22);f.rotation.z=Math.PI/2;reg(step,f);
+    [-1,1].forEach(s=>{const ring=mesh(new THREE.TorusGeometry(r,.05,6,22),mat(0x3a3f42),x+s*l/2,y,z);ring.rotation.y=Math.PI/2;reg(step,ring);});
+    const hub=cyl(r*.25,r*.25,l+.04,0x2a2e31,x,y,z,10);hub.rotation.z=Math.PI/2;reg(step,hub);return f;}
+
+  // 1. 급기: 지상 급기구 → 급기 샤프트 → 급기팬 (서쪽 벽)
+  const SX=-31.6;
+  const sShaft=mesh(new THREE.BoxGeometry(2.4,-FY,2.4),glass(0xb9c6cc,.16),SX,FY/2,0); sShaft.renderOrder=5; scene.add(sShaft); scene.add(edges(sShaft,.5));
+  const sTop=mesh(new THREE.BoxGeometry(2.4,1.6,2.4),glass(0xa9b4b8,.5),SX,.8,0); sTop.renderOrder=6; reg(1,sTop); scene.add(edges(sTop,.7));
+  reg(1,box(2.8,.2,2.8,0x8f9893,SX,1.7,0));
+  for(let y=.25;y<1.5;y+=.28) reg(1,box(.06,.08,2.2,0x6c767a,SX-1.23,y,0));
+  reg(1,box(.6,1.4,1.4,0x9aa3a6,-30.1,-2.2,0,{metalness:.3}));
+  fanX(1,-29,-2.2,0,.8,1.6,0x5c87a6);
+  [-29.5,-28.5].forEach(x=>reg(1,cyl(.07,.07,-3.0-FY,0x6c7275,x,(FY-3.0)/2,0,8)));
+  air([V(SX-3.4,1.0,0),V(SX,1.0,0),V(SX,-2.2,0),V(-27.6,-2.2,0)],COL.fresh,2.2,1.3);
+  anchors[1]=V(-29.6,-1.0,0);
+
+  // 2. 제트팬(유인팬) 4대 → 공기 흐름
+  const JZ=-4, JY=-1.5;
+  [-18,-6,6,18].forEach(x=>{fanX(2,x,JY,JZ,.36,1.6,0x6a8fa8);
+    [-.5,.5].forEach(dx=>reg(2,cyl(.03,.03,CY-(JY+.36)+.02,0x7c8285,x+dx,(CY+JY+.36)/2,JZ,6)));});
+  air([V(-27.6,-2.2,0),V(-21,JY,JZ),V(4,JY,JZ)],COL.fresh,2.6,1.6);
+  air([V(4,JY,JZ),V(24,JY,JZ),V(27,-2.2,-8)],COL.exh,2.6,1.6);
+  air([V(-27,-3.6,3.5),V(20,-3.6,3.5),V(26.5,-2.6,-7)],COL.fresh,2.0,2.4);
+  anchors[2]=V(-6,-.95,JZ);
+
+  // 3. CO 감지기(기둥) → 제어반으로 신호
+  const VPX=-29.2, VPZ=-7, VPTOP=FY+3.12;
+  const SENS=[[-20,-10.14],[-10,-10.14],[0,-10.14],[10,-10.14],[20,-10.14],[-10,10.14],[10,10.14]];
+  SENS.forEach(([x,z])=>{reg(3,box(.32,.42,.1,0xeef0ee,x,-3.2,z));const d=box(.2,.1,.02,0x2a3a2e,x,-3.12,z+Math.sign(-z)*.06,{emissive:0x1e6a3a});reg(3,d);});
+  pipe(3,[V(20,-1.0,-10.14),V(VPX,-1.0,-10.14),V(VPX,-1.0,VPZ),V(VPX,VPTOP,VPZ)],COL.sense,.035);
+  pipe(3,[V(-10,-1.0,10.14),V(-10,-1.0,-10.14)],COL.sense,.035);
+  pipe(3,[V(10,-1.0,10.14),V(10,-1.0,-10.14)],COL.sense,.035);
+  SENS.forEach(([x,z])=>{pipe(3,[V(x,-2.99,z),V(x,-1.0,z)],COL.sense,.03);
+    const pts=[V(x,-2.99,z),V(x,-1.0,z)]; if(z>0) pts.push(V(x,-1.0,-10.14)); pts.push(V(VPX,-1.0,-10.14),V(VPX,-1.0,VPZ),V(VPX,VPTOP,VPZ));
+    flow(pts,COL.sense,.035,2.2,4.5);});
+  anchors[3]=V(-10,-2.7,-10.14);
+
+  // 4. 환기 제어반(서쪽 벽, +x를 향함) → 급기팬·제트팬·배기팬 제어
+  cubicle(4,VPX,VPZ,2.2,Math.PI/2,g=>{g.add(box(1.4,1.3,.5,0x2a2e31,0,1.7,-.4));},
+    (p,w)=>{lcd(p,w/2,2.45);[-.45,-.15,.15,.45].forEach(dx=>lamp(p,w/2+dx,1.95,0x2fb05f));lamp(p,w/2+.45,1.7,0xf2c230);});
+  const CTL=[V(-28.8,VPTOP,-6.2),V(-28.8,-.95,-6.2),V(-28.8,-.95,JZ),V(27,-.95,JZ),V(28,-.95,-8),V(28,-1.3,-8)];
+  cable(4,CTL,COL.sense,.04,3,false,3.2);
+  cable(4,[V(-28.8,-.95,JZ),V(-28.8,-.95,0),V(-29,-.95,0),V(-29,-1.4,0)],COL.sense,.04,1.6,false,1.2);
+  anchors[4]=V(VPX,-1.7,VPZ);
+
+  // 5. 배기팬(동쪽 벽) → 배기 샤프트
+  const EX=31.6, EZ=-8;
+  fanX(5,28,-2.2,EZ,.9,1.8,0x7d6d5c);
+  [27.4,28.6].forEach(x=>reg(5,cyl(.08,.08,-3.1-FY,0x6c7275,x,(FY-3.1)/2,EZ,8)));
+  reg(5,box(.5,.5,.5,0x3f4549,28,-2.2,EZ+1.15));
+  reg(5,box(1.5,1.4,1.4,0x9a948a,29.65,-2.2,EZ,{metalness:.3}));
+  reg(5,box(.06,1.2,1.2,0x55595c,29.9,-2.2,EZ));
+  air([V(28.9,-2.2,EZ),V(EX,-2.2,EZ)],COL.exh,2,1.0);
+  anchors[5]=V(28,-1.0,EZ);
+
+  // 6. 배기 샤프트 → 지상 배기탑
+  const eShaft=mesh(new THREE.BoxGeometry(2.4,-FY,2.4),glass(0xc6bdb2,.16),EX,FY/2,EZ); eShaft.renderOrder=5; scene.add(eShaft); scene.add(edges(eShaft,.5));
+  const eTop=mesh(new THREE.BoxGeometry(2.4,3.6,2.4),glass(0xa79d90,.5),EX,1.8,EZ); eTop.renderOrder=6; reg(6,eTop); scene.add(edges(eTop,.7));
+  reg(6,box(2.9,.22,2.9,0x8a8278,EX,3.71,EZ));
+  for(let y=1.3;y<3.4;y+=.3) reg(6,box(.06,.08,2.2,0x6e665c,EX+1.23,y,EZ));
+  air([V(EX,-2.2,EZ),V(EX,2.6,EZ),V(EX+4,2.6,EZ),V(EX+5.5,3.2,EZ)],COL.exh,2.2,1.2);
+  anchors[6]=V(EX,4.4,EZ);
+
+  // 7. 소방 연동: 수신기 신호(천장 위에서) → 연동 중계함 → 환기 제어반
+  reg(7,box(.26,.7,.5,0xb03a2e,-29.85,-2.9,-10));
+  reg(7,mesh(new THREE.SphereGeometry(.07,10,8),mat(0xe23a2e,{emissive:0xe23a2e,emissiveIntensity:.6}),-29.7,-2.7,-10));
+  cable(7,[V(-29.75,CY,-10),V(-29.75,-2.55,-10)],COL.fire,.04,1.4,false,.9);
+  cable(7,[V(-29.75,-2.9,-9.75),V(-29.75,-2.9,-8.1)],COL.fire,.04,1.2,false,.6);
+  anchors[7]=V(-29.75,-2.3,-10);
+
+  // 8. 전기실(수전 편) 변압기·저압반 → 충전기 전용 분전반
+  const eroom=mesh(new THREE.BoxGeometry(10,GH,6.2),glass(0xcfd2d4,.10),8,GYC,19.4); eroom.renderOrder=4; scene.add(eroom); scene.add(edges(eroom,.5));
+  reg(8,box(1.8,2,1.4,0x6f7a72,5,FY+1,20.5,{metalness:.25}));
+  reg(8,box(2.6,2.3,.8,PANEL,8.5,FY+1.15,21.6));
+  pipe(8,[V(5,FY+2,20.5),V(5,-1.6,20.5),V(5,-1.6,21.6),V(8.5,-1.6,21.6),V(8.5,FY+2.3,21.6)],COL.power,.07);
+  const EVX=11.4, EVZ=15.2;
+  cable(8,[V(9.2,FY+2.3,21.6),V(9.2,-1.3,21.6),V(9.2,-1.3,EVZ),V(10.9,-1.3,EVZ),V(10.9,VPTOP,EVZ)],COL.power,.08,2.6);
+  cubicle(8,EVX,EVZ,1.6,Math.PI,g=>{g.add(box(1.1,1.4,.4,0x2a2e31,0,1.7,-.45));},
+    (p,w)=>{lcd(p,w/2,2.45);lamp(p,w/2-.3,1.95,0x2fb05f);lamp(p,w/2,1.95,0x2fb05f);lamp(p,w/2+.3,1.95,0xe23a2e);p.add(box(.9,.12,.02,0xf07c1a,w/2,2.82,.04));});
+  anchors[8]=V(EVX,-1.7,EVZ);
+
+  // 9. 완속충전기 4대 · 충전 중 EV
+  const SLOW=[13.75,16.25,18.75,21.25], TRY=-1.1, WZ=15.86;
+  pipe(9,[V(11.9,VPTOP,EVZ),V(11.9,TRY,EVZ),V(11.9,TRY,WZ),V(24,TRY,WZ),V(24,TRY,15.6),V(24,FY+1.9,15.6)],COL.power,.06);
+  SLOW.forEach(x=>{
+    reg(9,box(.42,.6,.16,0xeef1f0,x,-3.85,15.9));
+    reg(9,box(.26,.16,.02,0x23272a,x,-3.72,15.81,{emissive:0x153d55}));
+    reg(9,box(.12,.18,.08,0x2a2e31,x+.13,-4.05,15.79));
+    pipe(9,[V(x,TRY,WZ),V(x,-3.55,WZ)],COL.power,.045);
+    flow([V(11.9,VPTOP,EVZ),V(11.9,TRY,EVZ),V(11.9,TRY,WZ),V(x,TRY,WZ),V(x,-3.55,WZ)],COL.power,.05,2.6,2.4);
+  });
+  cable(9,[V(16.25,-4.15,15.78),V(16.05,-4.9,15.6),V(15.65,-4.55,15.37)],COL.power,.04,.8,false,.5);
+  cable(9,[V(21.25,-4.15,15.78),V(21.25,-4.6,15.7),V(21.25,-4.15,15.79)],0x2a2e31,.035,0,true);
+  anchors[9]=V(16.25,-3.3,15.86);
+
+  // 10. 급속충전기(DC) · 과금형 콘센트(기둥)
+  reg(10,box(.9,1.9,.6,0xdfe3e2,24,FY+.95,15.6));
+  reg(10,box(.5,.35,.02,0x23272a,24,FY+1.45,15.29,{emissive:0x153d55}));
+  reg(10,box(.7,.25,.02,0x6d7377,24,FY+.35,15.29));
+  reg(10,box(.9,.06,.6,0xf07c1a,24,FY+1.93,15.6,{emissive:0x5a2a00}));
+  flow([V(11.9,VPTOP,EVZ),V(11.9,TRY,EVZ),V(11.9,TRY,WZ),V(24,TRY,WZ),V(24,TRY,15.6),V(24,FY+1.9,15.6)],COL.power,.06,3,2.4);
+  cable(10,[V(24.45,-4.0,15.5),V(25,-4.9,15.45),V(25.6,-4.55,15.36)],COL.power,.06,.8,false,.5);
+  reg(10,box(.25,.35,.1,0xeef1f0,10,-4.0,10.86));
+  reg(10,box(.14,.08,.02,0x2a3a2e,10,-3.9,10.92,{emissive:0x1e6a3a}));
+  pipe(10,[V(10,CY,10.86),V(10,-3.83,10.86)],0x8d9396,.03);
+  cable(10,[V(10,-4.12,10.92),V(9.7,-4.9,11.0),V(9.4,-4.55,11.04)],COL.power,.035,.6,false,.45);
+  anchors[10]=V(24,-3.0,15.6);
+
+  // 11. 통신함(게이트웨이) → 충전기 과금·부하관리 신호
+  reg(11,box(.5,.4,.18,0x5d4f7a,12.75,-2.9,15.9));
+  reg(11,cyl(.02,.02,.45,0x2a2e31,12.92,-2.48,15.9,6));
+  reg(11,mesh(new THREE.SphereGeometry(.05,8,6),mat(0x8a5cd0,{emissive:0x8a5cd0,emissiveIntensity:.8}),12.92,-2.24,15.9));
+  const SG=15.965;
+  pipe(11,[V(13.0,-2.9,SG),V(24,-2.9,SG),V(24,-2.9,15.85),V(24,FY+1.9,15.85)],COL.sense,.03);
+  SLOW.forEach(x=>{pipe(11,[V(x,-2.9,SG),V(x,-3.55,SG)],COL.sense,.025);flow([V(13.0,-2.9,SG),V(x,-2.9,SG),V(x,-3.55,SG)],COL.sense,.03,1.6,1.4);});
+  flow([V(13.0,-2.9,SG),V(24,-2.9,SG),V(24,-2.9,15.85),V(24,FY+1.9,15.85)],COL.sense,.03,1.6,1.4);
+  anchors[11]=V(12.75,-2.5,15.9);
+
+  // 12. 충전구역 바닥 도색 · 표지판 (램프 출입구 가까운 쪽)
+  const patch=box(15.5,.008,5.2,0x3f9b6a,20.25,FY+.004,13.4,{roughness:1}); patch.castShadow=false; reg(12,patch);
+  reg(12,box(3.2,.7,.08,0x2e8b57,16.5,-1.6,10.85));
+  reg(12,box(2.4,.16,.02,0xffffff,16.5,-1.6,10.8));
+  [15.3,17.7].forEach(x=>reg(12,cyl(.02,.02,.45,0x7c8285,x,(CY-1.25)/2,10.85,6)));
+  anchors[12]=V(16.5,-1.0,10.85);
+
+  // 13. 화재 안전: 열화상 CCTV · 스프링클러 · 질식소화포 보관함 · 이동식 수조
+  reg(13,cyl(.04,.04,.27,0x7c8285,22,CY-.135,10.4,6));
+  reg(13,box(.3,.25,.55,0xe9ecea,22,-1.2,10.4));
+  (function(){const l=cyl(.09,.09,.08,0x1e2224,22,-1.22,10.71,12);l.rotation.x=Math.PI/2;reg(13,l);})();
+  pipe(13,[V(12.5,-1.0,13.2),V(28.5,-1.0,13.2)],COL.fire,.06);
+  for(let x=13.75;x<28.5;x+=2.5){reg(13,cyl(.04,.04,.14,0xc9a227,x,-1.12,13.2,8));reg(13,cyl(.09,.09,.02,0xc9a227,x,-1.2,13.2,10));}
+  reg(13,box(.32,1.1,.9,0xc0392b,29.82,FY+1.3,11.8));
+  reg(13,box(.02,.18,.6,0xffffff,29.65,FY+1.65,11.8));
+  reg(13,box(1.0,.45,.7,0xd9a521,28.6,FY+.225,8.0));
+  reg(13,cyl(.18,.18,.9,0x3a6fa0,28.6,FY+.63,8.0,12)).rotation.z=Math.PI/2;
+  anchors[13]=V(29.6,-3.4,11.8);
+
+  // 하이라이트 링
+  const ring=mesh(new THREE.RingGeometry(.9,1.05,40),new THREE.MeshBasicMaterial({color:0xffffff,transparent:true,opacity:.9,side:THREE.DoubleSide,depthTest:false}));
+  ring.renderOrder=20; scene.add(ring);
+
+  // 카메라 시점
+  const VIEWS={
+    0:[V(30,30,46),V(5,-3,1)],
+    1:[V(-19,3,11),V(-30,-1.2,0)],
+    2:[V(-25,-3,10),V(-2,-1.7,-4)],
+    3:[V(-5,-2.2,-3),V(-10,-3.0,-10)],
+    4:[V(-22,-1.6,-2),V(-29,-3.2,-7)],
+    5:[V(20.5,-1.4,-1),V(28.5,-2.4,-8)],
+    6:[V(17,10,9),V(32,0.5,-10)],
+    7:[V(-23.5,-1.6,-3.5),V(-29.6,-2.9,-9)],
+    8:[V(15,-1.3,6.5),V(9.5,-3,17)],
+    9:[V(14.5,-0.95,7),V(17.5,-3.9,15.6)],
+    10:[V(16.5,-1.4,3),V(18,-4,13)],
+    11:[V(9.5,-2.2,9),V(14,-3.4,15.5)],
+    12:[V(5,9,-9),V(24,-3.5,7)],
+    13:[V(14,-2,2),V(23,-3,12)]
+  };
+  const UNDER={1:1,2:1,3:1,4:1,5:1,7:1,8:1,9:1,10:1,11:1,12:1,13:1};
+  let tween=null, sel=1, groundTarget=.5, hoverStep=0;
+
+  function fit(p,t){const asp=view.clientWidth/Math.max(1,view.clientHeight);const k=asp<1?1.55:asp<1.3?1.2:1;return t.clone().add(p.clone().sub(t).multiplyScalar(k));}
+  function flyTo(i,instant){const [p,t]=VIEWS[i];const pp=fit(p,t);
+    if(REDUCE||instant){camera.position.copy(pp);controls.target.copy(t);controls.update();tween=null;return;}
+    tween={p0:camera.position.clone(),t0:controls.target.clone(),p1:pp,t1:t.clone(),s:performance.now(),d:1500};}
+
+  // 하이라이트 재질
+  function paint(){
+    for(let i=1;i<=N;i++){
+      groups[i].traverse(o=>{ if(!o.isMesh||!o.material.emissive) return;
+        if(o.userData.baseE===undefined) o.userData.baseE=o.material.emissive.getHex();
+        if(i===sel){o.material.emissive.setHex(0xffb15c);o.userData.hl=true;}
+        else {o.material.emissive.setHex(o.userData.baseE);o.material.emissiveIntensity=1;o.userData.hl=false;}
+      });
+    }
+  }
+
+  // HTML 이름표
+  const tags={};
+  STEPS.forEach(s=>{const b=document.createElement("button");b.type="button";b.className="tag";b.dataset.n=s.n;
+    b.style.setProperty("--c",ZONE[s.z].c);b.innerHTML=`<i>${s.n}</i><span>${s.tag}</span><em>${s.t===s.tag?"":s.t}</em>`;
+    b.setAttribute("aria-label",s.n+"단계 "+s.t);
+    b.onclick=()=>{stopTour();select(s.n);};labelsEl.appendChild(b);tags[s.n]=b;});
+  STEPS.forEach(s=>{const e=tags[s.n].querySelector("em"); if(s.t===s.tag) e.remove();});
+
+  // 테마
+  function theme(){
+    const cs=getComputedStyle(document.documentElement), g=k=>cs.getPropertyValue(k).trim()||"#888";
+    const bg=new THREE.Color(g("--scene-bg"));
+    scene.background=bg; scene.fog=new THREE.Fog(bg,160,340);
+    groundMat.color.set(g("--scene-ground"));
+    const ln=new THREE.Color(g("--scene-line")); edgeMats.forEach(m=>m.color.copy(ln));
+    ring.material.color.set(g("--focus"));
+  }
+  theme();
+  matchMedia("(prefers-color-scheme: dark)").addEventListener("change",theme);
+  new MutationObserver(theme).observe(document.documentElement,{attributes:true,attributeFilter:["data-theme","style","class"]});
+
+  // 크기
+  function resize(){const w=view.clientWidth,h=view.clientHeight;renderer.setSize(w,h,false);camera.aspect=w/h;camera.updateProjectionMatrix();}
+  new ResizeObserver(resize).observe(view); resize();
+
+  // 클릭/호버
+  const ray=new THREE.Raycaster(), mv=new THREE.Vector2(); let down=null;
+  function hit(e){const r=canvas.getBoundingClientRect();mv.set(((e.clientX-r.left)/r.width)*2-1,-((e.clientY-r.top)/r.height)*2+1);ray.setFromCamera(mv,camera);
+    const h=ray.intersectObjects(pickables,false).find(x=>x.object.visible);return h?h.object.userData.step:0;}
+  canvas.addEventListener("pointerdown",e=>{down=[e.clientX,e.clientY];stopTour();tween=null;});
+  canvas.addEventListener("pointerup",e=>{if(down&&Math.hypot(e.clientX-down[0],e.clientY-down[1])<6){const s=hit(e);if(s)select(s);}down=null;});
+  let lastHover=0;
+  canvas.addEventListener("pointermove",e=>{if(e.buttons||e.pointerType!=="mouse")return;const now=performance.now();if(now-lastHover<60)return;lastHover=now;
+    hoverStep=hit(e);canvas.style.cursor=hoverStep?"pointer":"grab";});
+
+  // 루프
+  const tmp=new THREE.Vector3(), tan=new THREE.Vector3(); let last=performance.now();
+  function loop(now){
+    const dt=Math.min(.05,(now-last)/1000); last=now;
+    if(tween){let k=Math.min(1,(now-tween.s)/tween.d);k=k<.5?4*k*k*k:1-Math.pow(-2*k+2,3)/2;
+      camera.position.lerpVectors(tween.p0,tween.p1,k);controls.target.lerpVectors(tween.t0,tween.t1,k);if(k>=1)tween=null;}
+    controls.update();
+    // 공기·전력·신호 흐름
+    const t=now/1000;
+    flows.forEach(f=>{const u=REDUCE?f.off:((f.off+t*f.speed/f.len)%1);f.c.getPointAt(u,f.s.position);
+      if(f.dir){f.c.getTangentAt(u,tan);if(tan.lengthSq()>1e-6)f.s.quaternion.setFromUnitVectors(UP,tan.normalize());}});
+    // 문 열림
+    doors.forEach(d=>{const target=d.step===sel?-1.9:0;d.a+=(target-d.a)*Math.min(1,dt*5);d.pivot.rotation.y=d.a;});
+    // 지면 투명도
+    groundTarget=UNDER[sel]?.14:.55; groundMat.opacity+=(groundTarget-groundMat.opacity)*Math.min(1,dt*4);
+    // 하이라이트 펄스
+    const pulse=REDUCE?.35:.22+.18*Math.sin(t*3.2);
+    groups[sel].traverse(o=>{if(o.isMesh&&o.userData.hl)o.material.emissiveIntensity=pulse;});
+    // 링
+    ring.position.copy(anchors[sel]); ring.quaternion.copy(camera.quaternion);
+    const sc=camera.position.distanceTo(ring.position)*.045*(REDUCE?1:1+.12*Math.sin(t*3.2)); ring.scale.setScalar(sc);
+    renderer.render(scene,camera);
+    // 이름표
+    const w=view.clientWidth,h=view.clientHeight, show=$("#btnTags").getAttribute("aria-pressed")==="true";
+    for(let i=1;i<=N;i++){const el=tags[i];tmp.copy(anchors[i]).project(camera);
+      const vis=tmp.z<1&&tmp.x>-1.1&&tmp.x<1.1&&tmp.y>-1.1&&tmp.y<1.1&&(show||i===sel);
+      if(!vis){el.hidden=true;continue;} el.hidden=false;
+      const yo = i===sel? -26 : -16;
+      el.style.transform=`translate(${(tmp.x*.5+.5)*w}px,${(-tmp.y*.5+.5)*h+yo}px) translate(-50%,-50%)`;
+      el.classList.toggle("dim",i!==sel&&i!==hoverStep&&tmp.z>.995);}
+    requestAnimationFrame(loop);
+  }
+
+  return {
+    focus(n,o){sel=n;paint();flyTo(n,o&&o.instant);},
+    overview(instant){flyTo(0,instant);},
+    start(){requestAnimationFrame(loop);}
+  };
+}
+
+// ───────── 시작 ─────────
+try{ three=init3D(); }catch(e){
+  three=null;
+  const d=document.createElement("div");d.className="nogl";
+  d.innerHTML="<p>이 브라우저에서는 3D 모형을 불러오지 못했습니다.<br>오른쪽 설명과 아래 계통도로 같은 내용을 따라갈 수 있습니다.</p>";
+  view.appendChild(d); canvas.hidden=true; document.querySelector(".tools").hidden=true; document.querySelector(".hint").hidden=true;
+}
+const m=/^#s(\d{1,2})$/.exec(location.hash||""); const first=m&&+m[1]>=1&&+m[1]<=N?+m[1]:1;
+if(three){ three.focus(first,{instant:true}); if(!m) three.overview(true); three.start(); }
+cur=first; renderPanel();
+
+$("#btnAll").onclick=()=>{stopTour(); if(three) three.overview();};
+$("#btnTags").onclick=e=>{const b=e.currentTarget;b.setAttribute("aria-pressed",b.getAttribute("aria-pressed")==="true"?"false":"true");};
+$("#btnTour").onclick=e=>{
+  if(tour){stopTour();return;}
+  const b=e.currentTarget;b.setAttribute("aria-pressed","true");b.textContent="투어 멈춤";
+  select(cur===N?1:cur);
+  tour=setInterval(()=>{ if(cur>=N){stopTour();return;} select(cur+1); },7000);
+};
+window.addEventListener("hashchange",()=>{const k=/^#s(\d{1,2})$/.exec(location.hash);if(k&&+k[1]!==cur&&+k[1]>=1&&+k[1]<=N)select(+k[1]);});
+})();
+</script>

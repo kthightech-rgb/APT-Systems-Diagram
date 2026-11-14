@@ -1,0 +1,875 @@
+<title>승강기 계통 따라가기</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@500;600&family=IBM+Plex+Sans+KR:wght@400;500;700&display=swap">
+<style>
+/* layout: 승강기 구간 띠 → [3D 승강로 모형 | 설비 설명 패널] → 승강기 계통도 → 점검 주기표 → 약어 */
+:root{
+  --bg:#eceef2; --surface:#f7f8fa; --raise:#ffffff; --ink:#1b1d26; --muted:#5a5f6e; --line:#d0d3dc;
+  --pwr:#c8680c; --ctl:#7046c8; --rope:#5d6975; --safe:#c3342a; --warn:#c3342a; --focus:#6a48d6;
+  --scene-bg:#dde0e7; --scene-ground:#c7cad1; --scene-line:#646a7a;
+  --f-sans:"IBM Plex Sans KR","Apple SD Gothic Neo","Malgun Gothic",system-ui,sans-serif;
+  --f-mono:"IBM Plex Mono",ui-monospace,Menlo,Consolas,monospace;
+}
+@media (prefers-color-scheme: dark){:root:not([data-theme="light"]){
+  --bg:#111219; --surface:#181a23; --raise:#1f222d; --ink:#e6e7ee; --muted:#9b9fb0; --line:#2b2e3b;
+  --pwr:#f0a04a; --ctl:#b39aff; --rope:#a3b0bd; --safe:#ff6b5c; --warn:#ff6b5c; --focus:#a58cff;
+  --scene-bg:#14151d; --scene-ground:#20222b; --scene-line:#8a8fa3; color-scheme:dark}}
+:root[data-theme="dark"]{
+  --bg:#111219; --surface:#181a23; --raise:#1f222d; --ink:#e6e7ee; --muted:#9b9fb0; --line:#2b2e3b;
+  --pwr:#f0a04a; --ctl:#b39aff; --rope:#a3b0bd; --safe:#ff6b5c; --warn:#ff6b5c; --focus:#a58cff;
+  --scene-bg:#14151d; --scene-ground:#20222b; --scene-line:#8a8fa3; color-scheme:dark}
+
+*{box-sizing:border-box}
+[hidden]{display:none!important}
+body{background:var(--bg);color:var(--ink);font-family:var(--f-sans);font-size:15px;line-height:1.6;
+  padding-left:max(16px,env(safe-area-inset-left,0px));padding-right:max(16px,env(safe-area-inset-right,0px));padding-block:20px 48px}
+.wrap{max-width:1360px;margin:0 auto;display:flex;flex-direction:column;gap:28px}
+h1,h2,h3{text-wrap:balance;margin:0;line-height:1.3}
+h1{font-size:clamp(22px,3vw,30px);font-weight:700;letter-spacing:-.01em}
+h2{font-size:19px;font-weight:700}
+.mono{font-family:var(--f-mono)}
+button{font:inherit;color:inherit}
+:focus-visible{outline:2px solid var(--focus);outline-offset:2px}
+
+header{display:flex;flex-direction:column;gap:14px}
+.lede{color:var(--muted);margin:0;max-width:68ch}
+.band{display:grid;grid-template-columns:1fr 1.1fr 1.1fr 1.5fr;border:1px solid var(--line);border-radius:6px;overflow:hidden;font-size:13px}
+.band div{padding:8px 12px;display:flex;flex-direction:column;gap:1px;border-right:1px solid var(--line);background:var(--surface);transition:background .3s;min-width:0}
+.band div:last-child{border-right:0}
+.band b{font-weight:600}
+.band span{font-family:var(--f-mono);font-size:12px;color:var(--muted)}
+.band div[data-z="pc"].on{background:color-mix(in srgb,var(--pwr) 10%,color-mix(in srgb,var(--ctl) 10%,var(--surface)))}
+.band div[data-z="drv"].on{background:color-mix(in srgb,var(--rope) 18%,var(--surface))}
+.band div[data-z="car"].on{background:color-mix(in srgb,var(--rope) 12%,var(--surface))}
+.band div[data-z="safe"].on{background:color-mix(in srgb,var(--safe) 14%,var(--surface))}
+.band div.on b{color:var(--ink)}
+.band div::before{content:"";display:block;height:3px;border-radius:2px;margin-bottom:5px;background:var(--line)}
+.band div[data-z="pc"]::before{background:linear-gradient(90deg,var(--pwr),var(--ctl))}
+.band div[data-z="drv"]::before,.band div[data-z="car"]::before{background:var(--rope)}
+.band div[data-z="safe"]::before{background:var(--safe)}
+
+.stage{display:grid;grid-template-columns:minmax(0,1fr) 400px;gap:0;border:1px solid var(--line);border-radius:8px;overflow:hidden;background:var(--surface)}
+.view{position:relative;min-height:560px;height:min(76vh,720px);background:var(--scene-bg)}
+.view canvas{display:block;width:100%;height:100%;touch-action:none;cursor:grab}
+.view canvas:active{cursor:grabbing}
+.labels{position:absolute;inset:0;pointer-events:none;overflow:hidden}
+.tag{position:absolute;left:0;top:0;pointer-events:auto;transform:translate(-50%,-50%);display:flex;align-items:center;gap:5px;
+  border:1px solid var(--line);background:var(--raise);border-radius:999px;padding:2px 8px 2px 3px;font-size:12px;white-space:nowrap;cursor:pointer;
+  box-shadow:0 1px 3px rgb(0 0 0 / .12);transition:opacity .2s}
+.tag i{font-style:normal;font-family:var(--f-mono);font-weight:600;font-size:11px;width:19px;height:19px;border-radius:50%;display:grid;place-items:center;color:#fff;background:var(--c)}
+.tag em{font-style:normal;font-family:var(--f-mono);font-size:11px;color:var(--muted)}
+.tag.on{border-color:var(--c);z-index:5;font-weight:600}
+.tag.on em{color:var(--ink)}
+.tag.dim{opacity:.55}
+.tools{position:absolute;top:10px;left:10px;display:flex;gap:6px;flex-wrap:wrap}
+.tools button,.nav button{border:1px solid var(--line);background:var(--raise);border-radius:6px;padding:6px 11px;font-size:13px;cursor:pointer}
+.tools button:hover,.nav button:hover{border-color:var(--muted)}
+.tools button[aria-pressed="true"]{background:var(--ink);color:var(--bg);border-color:var(--ink)}
+.legend{position:absolute;bottom:10px;left:10px;right:10px;width:max-content;max-width:calc(100% - 20px);display:flex;gap:4px 12px;flex-wrap:wrap;font-size:12px;background:color-mix(in srgb,var(--raise) 88%,transparent);border:1px solid var(--line);border-radius:6px;padding:5px 10px}
+.legend span{display:flex;align-items:center;gap:5px}
+.legend span::before{content:"";width:14px;height:3px;border-radius:2px;background:var(--c)}
+.hint{position:absolute;bottom:10px;right:10px;font-size:12px;color:var(--muted);background:color-mix(in srgb,var(--raise) 88%,transparent);border-radius:6px;padding:4px 8px}
+.nogl{position:absolute;inset:0;display:grid;place-items:center;text-align:center;padding:24px;color:var(--muted)}
+
+.panel{border-left:1px solid var(--line);display:flex;flex-direction:column;min-height:0;height:min(76vh,720px);min-width:0}
+.ph{padding:16px 18px 12px;border-bottom:1px solid var(--line);display:flex;flex-direction:column;gap:8px}
+.ph .meta{display:flex;align-items:center;gap:8px;font-size:12px;color:var(--muted)}
+.pill{font-size:11.5px;font-weight:600;padding:1px 8px;border-radius:999px;color:var(--c);background:color-mix(in srgb,var(--c) 14%,transparent)}
+.ph h3{font-size:20px;font-weight:700}
+.ph .abbr{font-family:var(--f-mono);font-size:13px;color:var(--muted)}
+.progress{display:grid;grid-template-columns:repeat(var(--n,12),1fr);gap:3px}
+.progress button{height:6px;border:0;border-radius:2px;background:var(--line);cursor:pointer;padding:0}
+.progress button.done{background:color-mix(in srgb,var(--ink) 35%,var(--line))}
+.progress button.on{background:var(--c)}
+.pb{padding:14px 18px;overflow:auto;flex:1;min-height:0;display:flex;flex-direction:column;gap:14px}
+.pb section{display:flex;flex-direction:column;gap:4px}
+.pb h4{margin:0;font-size:11.5px;letter-spacing:.06em;color:var(--muted);font-weight:600}
+.pb p{margin:0}
+.pb ul{margin:0;padding-left:18px;display:flex;flex-direction:column;gap:3px}
+.pb .easy{background:color-mix(in srgb,var(--c) 8%,var(--raise));border-radius:6px;padding:9px 12px}
+.pb .fault{border-left:3px solid var(--warn);padding-left:10px}
+.nav{display:flex;gap:8px;padding:12px 18px;border-top:1px solid var(--line);align-items:center}
+.nav .next{margin-left:auto;background:var(--ink);color:var(--bg);border-color:var(--ink)}
+.nav .next:hover{border-color:var(--ink);opacity:.9}
+.nav small{color:var(--muted);font-size:12px;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+
+.sld{border:1px solid var(--line);border-radius:8px;background:var(--surface);padding:16px;display:flex;flex-direction:column;gap:10px;min-width:0}
+.sld .scroll{overflow-x:auto}
+.sld svg{display:block;min-width:1000px;width:100%;height:auto}
+.sld .node{cursor:pointer}
+.sld .node rect{fill:var(--raise);stroke:var(--line);stroke-width:1.2}
+.sld .node.on rect{stroke:var(--c);stroke-width:2.4}
+.sld .node:hover rect{stroke:var(--muted)}
+.sld text{fill:var(--ink);font-family:var(--f-sans)}
+.sld .ab{font-family:var(--f-mono);font-size:12.5px;font-weight:600}
+.sld .nm{font-size:11.5px;fill:var(--muted)}
+.sld .num{font-family:var(--f-mono);font-size:10px;font-weight:600;fill:#fff}
+.note{font-size:13px;color:var(--muted);margin:0}
+
+.two{display:grid;grid-template-columns:1.35fr 1fr;gap:20px}
+.box{border:1px solid var(--line);border-radius:8px;background:var(--surface);padding:16px;display:flex;flex-direction:column;gap:10px;min-width:0}
+.tbl{overflow-x:auto}
+table{border-collapse:collapse;width:100%;font-size:13.5px}
+th,td{text-align:left;padding:7px 10px;border-bottom:1px solid var(--line);vertical-align:top}
+th{font-size:12px;color:var(--muted);font-weight:600;letter-spacing:.03em}
+td:first-child{white-space:nowrap;font-weight:600}
+.safety{display:flex;gap:6px;flex-wrap:wrap;align-items:center;font-size:13.5px}
+.safety b{font-weight:600;padding:3px 9px;border-radius:5px;background:var(--raise);border:1px solid var(--line)}
+.safety span{color:var(--muted)}
+dl{margin:0;display:grid;grid-template-columns:auto 1fr;gap:5px 14px;font-size:13.5px}
+dt{font-family:var(--f-mono);font-weight:600}
+dd{margin:0;color:var(--muted);min-width:0;overflow-wrap:anywhere}
+.en{font-family:var(--f-mono);font-size:12px;color:var(--muted);font-style:italic}
+dd .en{display:block}
+.ph .en{line-height:1.5}
+footer{font-size:12.5px;color:var(--muted)}
+
+@media (max-width:980px){
+  .stage{grid-template-columns:1fr}
+  .view{height:56vh;min-height:360px}
+  .panel{border-left:0;border-top:1px solid var(--line);height:auto}
+  .pb{overflow:visible}
+  .two{grid-template-columns:1fr}
+}
+@media (max-width:560px){
+  .band{grid-template-columns:1fr 1fr}
+  .band div:nth-child(2){border-right:0}
+  .band div:nth-child(-n+2){border-bottom:1px solid var(--line)}
+  .hint{display:none}
+  .tag em{display:none}
+  .tag.on em{display:inline}
+  .legend{font-size:11px;gap:2px 10px}
+}
+
+.series{display:flex;align-items:center;gap:6px;flex-wrap:wrap;font-size:13px}
+.series>span{color:var(--muted);margin-right:4px;font-weight:600}
+.series a{color:var(--ink);text-decoration:none;border:1px solid var(--line);background:var(--raise);border-radius:999px;padding:3px 12px}
+.series a:hover{border-color:var(--muted)}
+.series a[aria-current="page"]{background:var(--ink);color:var(--bg);border-color:var(--ink);pointer-events:none}
+</style>
+
+<div class="wrap">
+<nav class="series" aria-label="설비 계통 시리즈"><span>시리즈</span><a href="https://claude.ai/artifact/RQfeUsLeuvXUD9krYjsrT2" target="_blank" rel="noopener">1. 수전</a><a href="https://claude.ai/artifact/GNKFoV96Mde9fiEeYaCPxu" target="_blank" rel="noopener">2. 급수</a><a href="https://claude.ai/artifact/QcEbQmw9pbrTnDaZEpobie" target="_blank" rel="noopener">3. 소방</a><a href="https://claude.ai/artifact/2xiSzJKT3oeb1BDYaaE5LZ" target="_blank" rel="noopener">4. 난방·급탕</a><a href="https://claude.ai/artifact/TGUgN1swzvWmoNVwt6x2FU" target="_blank" rel="noopener">5. 오수·배수</a><a href="https://claude.ai/artifact/3QW6URxhEZvC7udQfH9DGw" aria-current="page">6. 승강기</a><a href="https://claude.ai/artifact/Y8iFzrRZk6V7TBSjAsGNoR" target="_blank" rel="noopener">7. 주차장 환기·EV</a><a href="https://claude.ai/artifact/LtWvvBdn6C5TLMZ47MR22K" target="_blank" rel="noopener">8. 홈네트워크·CCTV</a></nav>
+<header>
+  <h1>승강기 구조와 안전장치 따라가기</h1>
+  <p class="lede">전기가 들어와 카를 움직이고, 여러 겹의 안전장치가 승객을 지키는 순서대로 승강기를 하나씩 짚어 봅니다. 3D 모형에서 설비를 누르거나 ‘다음’을 눌러 따라가세요. 드래그하면 회전, 휠·두 손가락으로 확대됩니다.</p>
+  <div class="band" id="band">
+    <div data-z="pc" data-b="0"><b>동력·제어</b><span>저압반 → 제어반</span></div>
+    <div data-z="drv" data-b="1"><b>구동(권상)</b><span>권상기 · 로프 · 균형추</span></div>
+    <div data-z="car" data-b="2"><b>카·도어</b><span>카 도어 · 승강장 도어</span></div>
+    <div data-z="safe" data-b="3"><b>안전장치</b><span>조속기 · 비상정지 · 인터록 · 완충기</span></div>
+  </div>
+</header>
+
+<div class="stage">
+  <div class="view" id="view">
+    <canvas id="c" aria-label="아파트 승강기 3D 모형"></canvas>
+    <div class="labels" id="labels"></div>
+    <div class="tools">
+      <button id="btnAll" type="button">전체 보기</button>
+      <button id="btnTour" type="button" aria-pressed="false">자동 투어</button>
+      <button id="btnTags" type="button" aria-pressed="true">이름표</button>
+    </div>
+    <div class="legend">
+      <span style="--c:var(--pwr)">동력 전원</span>
+      <span style="--c:var(--ctl)">제어·신호</span>
+      <span style="--c:var(--rope)">로프·구동</span>
+      <span style="--c:var(--safe)">안전장치</span>
+    </div>
+    <div class="hint">← → 키로 단계 이동</div>
+  </div>
+  <aside class="panel" id="panel" aria-live="polite">
+    <div class="ph">
+      <div class="progress" id="progress"></div>
+      <div class="meta"><span class="mono" id="pNum">01 / 13</span><span class="pill" id="pZone">동력 전원</span></div>
+      <h3 id="pTitle"></h3>
+      <div class="abbr" id="pAbbr"></div>
+      <div class="en" id="pEn"></div>
+    </div>
+    <div class="pb" id="pBody"></div>
+    <div class="nav">
+      <button type="button" id="prev">이전</button>
+      <small id="navHint"></small>
+      <button type="button" class="next" id="next">다음</button>
+    </div>
+  </aside>
+</div>
+
+<section class="sld">
+  <h2>승강기 계통도로 다시 보기</h2>
+  <p class="note">윗줄은 전기와 힘이 카까지 가는 길, 아랫줄은 그 길을 지키는 안전장치와 비상 설비입니다. 칸을 누르면 위 3D 모형이 해당 설비로 이동합니다.</p>
+  <div class="scroll"><svg id="sld" viewBox="0 0 1000 250" role="img" aria-label="아파트 승강기 계통도"></svg></div>
+</section>
+
+<div class="two">
+  <section class="box">
+    <h2>점검 주기 한눈에 보기</h2>
+    <div class="tbl"><table>
+      <thead><tr><th>주기</th><th>무엇을</th><th>어디서</th></tr></thead>
+      <tbody>
+        <tr><td>매일</td><td>순회 때 운행 상태(이상 소음·진동, 착상 단차, 문 여닫힘), 카 내 조명·버튼·CCTV 화면, 원격감시 화면의 고장 표시 확인</td><td>각 동 승강장·관리사무소</td></tr>
+        <tr><td>매월</td><td>유지관리업체 자체점검(대체로 월 1회 이상) 입회와 결과 확인, 정보망 입력 확인, 비상통화 버튼 실제 통화 시험</td><td>기계실·카·관리사무소</td></tr>
+        <tr><td>분기</td><td>기계실 온도·환기·누수와 출입문 잠금, 비상해제 열쇠 보관 상태와 사용 대장 확인</td><td>기계실·관리사무소</td></tr>
+        <tr><td>장마 전</td><td>피트 누수·물 고임 확인 요청, 지하층까지 가는 승강기의 침수 대비 운행 계획, 기계실 지붕·창 방수</td><td>피트·옥상</td></tr>
+        <tr><td>매년</td><td>정기검사(대체로 1년 주기) 일정 공지·입회, 사고배상책임보험 갱신, 갇힘 대응 모의훈련</td><td>각 호기·관리사무소</td></tr>
+        <tr><td>수시</td><td>고장·갇힘 기록, 중대한 사고·고장 보고, 안전관리자 변경 때 선임 신고와 교육</td><td>관리사무소</td></tr>
+      </tbody>
+    </table></div>
+    <div class="safety"><span>갇힘 사고 대응</span><b>① 인터폰으로 안심시키기</b><span>→</span><b>② 동·호기·층 위치 확인</b><span>→</span><b>③ 유지관리업체·119 신고</b><span>→</span><b>④ 임의 구출 금지·승강장 통제</b><span>→</span><b>⑤ 구출 후 승객 상태 확인</b><span>→</span><b>⑥ 기록·보고</b></div>
+  </section>
+  <section class="box">
+    <h2>약어 풀이</h2>
+    <dl id="gloss"></dl>
+  </section>
+</div>
+
+<footer>교육용 일반 구성 모형입니다. 옥상 기계실이 있는 로프식 승강기를 기준으로 그렸고, 기계실 없는 MRL형이나 유압식은 장치 위치가 다릅니다. 제조사·연식마다 안전장치 구성과 점검 항목이 다르므로 실제 관리는 유지관리업체의 점검 기록, 제조사 설명서, 승강기 안전관리법령과 한국승강기안전공단 안내를 따르세요. 승강기 전원의 출발점(저압반·비상발전기)은 수전설비 편에서 다룹니다.</footer>
+</div>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/controls/OrbitControls.js"></script>
+<script>
+(function(){
+"use strict";
+// ───────── 단계 데이터 ─────────
+const ZONE = {
+  pwr:{n:"동력 전원",c:"var(--pwr)"}, ctl:{n:"제어·신호",c:"var(--ctl)"},
+  drive:{n:"구동·로프",c:"var(--rope)"}, car:{n:"카·도어",c:"var(--rope)"},
+  safe:{n:"안전장치",c:"var(--safe)"}, emer:{n:"비상 대응",c:"var(--safe)"},
+  mgmt:{n:"운행·법정 관리",c:"var(--ctl)"}
+};
+const STEPS = [
+{n:1,t:"승강기 동력 전원",a:"저압반 승강기 분기 · MCCB · ATS · 비상발전기",z:"pwr",band:[0],tag:"전원",
+ role:"승강기는 단지 수전설비의 저압반에서 전용 분기 회로로 전기를 받아, 옥상 기계실 입구의 주전원 차단기를 거쳐 제어반으로 보냅니다. 정전되면 비상발전기가 켜지고 ATS가 전원을 발전기 쪽으로 바꿔 연결해, 발전기 부하로 지정된 승강기가 다시 움직일 수 있습니다.",
+ easy:"승강기의 밥줄입니다. 이 줄이 끊기면 카는 그 자리에 멈춥니다.",
+ field:"지하 전기실 저압반에 ‘승강기’ 표찰이 붙은 차단기가 있고, 옥상 기계실 벽에 잠금 함 안의 주전원 차단기가 있습니다. 발전기실에는 발전기와 ATS가 있습니다. 동마다 승강기 몇 대가 발전기에 물려 있는지는 단지마다 다르므로 단선결선도로 확인합니다.",
+ manage:["기계실 주전원 차단기는 유지관리업체가 작업할 때 잠금·표찰(LOTO)을 하는 곳입니다. 관리사무소가 함부로 내리거나 올리지 않습니다.","발전기 시운전 때 발전기 부하인 승강기가 실제로 움직이는지 함께 확인합니다.","정전 뒤 전기가 돌아오면 모든 호기가 정상으로 돌아왔는지 순회해 확인합니다.","차단기 함 앞에 물건을 쌓지 않습니다."],
+ fault:"정전되면 카가 층 사이에 멈춰 사람이 갇힐 수 있습니다. 즉시 각 동 인터폰 호출이 있는지 확인하고 13단계 순서로 대응합니다. 전기가 돌아온 뒤에도 고장 상태로 남는 호기가 있으면 업체 점검을 요청합니다."},
+{n:2,t:"제어반",a:"운행 제어기 · VVVF 인버터 · 안전회로 · 기계실형/MRL형",z:"ctl",band:[0],tag:"제어반",
+ role:"승강장과 카의 버튼 신호를 받아 어느 층으로 갈지 정하고, VVVF 인버터로 전동기에 보내는 전압과 주파수를 바꿔 출발·가속·감속·착상을 부드럽게 합니다. 도어 스위치, 조속기, 리밋 스위치 같은 안전장치 신호가 직렬 안전회로로 모여 있어 하나라도 끊기면 곧바로 멈춥니다.",
+ easy:"승강기의 두뇌입니다. 어디로 갈지, 얼마나 세게 밟을지 정하고, 안전장치 하나라도 ‘정지’를 외치면 바로 멈춥니다.",
+ field:"기계실형은 옥상 기계실에 제어반과 권상기가 함께 있습니다. 최근 단지에 많은 기계실 없는 MRL형은 제어반이 최상층 승강장 문 옆 벽면 함이나 승강로 안에 있고, 권상기는 승강로 꼭대기에 붙어 있습니다. 제어반 표시창에 고장 코드가 남습니다.",
+ manage:["제어반은 유지관리업체 전용입니다. 관리사무소는 열쇠만 보관하고 함부로 열지 않습니다.","인버터는 열이 많이 나므로 기계실 온도, 환기팬·냉방기 동작, 천장 누수를 확인합니다.","MRL형은 최상층 제어반 함 앞에 화분·자전거 같은 물건을 두지 않도록 안내합니다.","고장 코드와 시각을 고장 이력과 함께 기록해 둡니다."],
+ fault:"제어반 이상이면 운행이 멈추거나 층을 건너뛰는 등 이상하게 움직입니다. 관리사무소가 임의로 전원을 껐다 켜서 되살리지 말고 업체를 부릅니다. 낙뢰·정전 뒤 고장이 잦으므로 날씨와 정전 여부도 함께 남깁니다."},
+{n:3,t:"권상기",a:"전동기 · 메인 시브(도르래) · 브레이크 · 기어리스형",z:"drive",band:[1],tag:"권상기",
+ role:"전동기가 시브를 돌리면 시브 홈에 걸린 주로프가 마찰력(트랙션)으로 끌려가 카와 균형추가 움직입니다. 멈출 때는 브레이크가 시브를 붙잡아 카를 그 층에 고정합니다. 브레이크는 전기가 끊기면 스프링 힘으로 저절로 잡히게 만들어져 있습니다.",
+ easy:"우물 도르래를 모터가 돌리는 모습입니다. 줄을 감아 올리는 것이 아니라 도르래 홈의 마찰로 줄을 밀고 당깁니다.",
+ field:"요즘 아파트에는 기어 없이 전동기가 시브를 직접 돌리는 기어리스 권상기가 많고, 오래된 승강기는 감속기(기어 오일)가 달린 기어식도 있습니다. 시브 홈에 로프 여러 가닥이 나란히 걸려 있고 시브 옆에 브레이크가 붙어 있습니다.",
+ manage:["순회 때 이상 소음(웅웅·딱딱), 진동, 타는 냄새가 없는지 봅니다.","기어식은 기름 새는 곳과 유량을 업체 점검 때 함께 확인합니다.","층 바닥과 카 바닥의 단차가 커지면 브레이크·시브 마모 신호일 수 있어 업체에 알립니다.","회전부에는 손을 대지 않고, 기계실은 관계자만 출입하도록 잠가 둡니다."],
+ fault:"카가 문이 열린 채 움직이거나 층을 지나쳐 서면 브레이크 계통의 중대한 이상일 수 있습니다. 즉시 운행을 멈추게 하고 사용 금지 표지를 붙인 뒤 업체를 부르고, 사고·고장 보고 대상인지 확인합니다."},
+{n:4,t:"주로프 · 균형추",a:"주로프(와이어로프) · 균형추(CWT) · 로프 소켓",z:"drive",band:[1],tag:"로프·CWT",
+ role:"주로프 한쪽 끝은 카에, 다른 쪽 끝은 균형추에 매달려 시브를 넘어갑니다. 균형추 무게는 대체로 카 무게에 정격 적재량의 절반쯤을 더한 만큼으로 맞춰서, 전동기는 둘의 무게 차이만큼만 힘을 쓰면 됩니다. 로프는 여러 가닥을 걸어 충분한 여유를 둡니다.",
+ easy:"시소 반대편에 무게추를 달아 둔 것입니다. 카가 올라가면 균형추는 내려가고, 카가 내려가면 균형추는 올라갑니다. 모형에서 둘이 엇갈려 움직이는 것을 보세요.",
+ field:"기계실 바닥 구멍으로 로프가 내려가고, 카 위 틀과 균형추 위에 로프 끝을 고정한 소켓·스프링이 있습니다. 균형추는 승강로 뒤쪽이나 옆쪽 레일 사이에서 철판 덩어리(웨이트)를 쌓은 틀입니다.",
+ manage:["로프 마모·소선 끊김·녹·장력은 업체가 점검하고 교체 시기를 알려 줍니다. 점검 기록에서 해당 항목을 확인합니다.","로프 교체는 비용이 커서 장기수선계획에 반영하고 견적을 비교합니다.","기계실 바닥 로프 구멍으로 물건이나 물이 떨어지지 않게 합니다."],
+ fault:"업체가 로프 교체 기준을 넘었다고 알리면 교체 전까지 운행 제한이 필요한지 협의합니다. 로프가 모두 끊기는 일은 매우 드물고, 그런 경우에도 조속기와 비상정지장치가 카를 세우도록 되어 있습니다."},
+{n:5,t:"조속기 · 조속기 로프",a:"조속기(GOV) · 과속 스위치 · 조속기 로프 · 피트 인장 도르래",z:"safe",band:[1,3],tag:"조속기",
+ role:"조속기 로프는 카에 연결돼 카와 함께 움직이며 기계실의 조속기 도르래를 돌립니다. 카가 정격 속도보다 일정 비율 이상 빨라지면 먼저 과속 스위치가 전동기와 브레이크 회로를 끊고, 그래도 더 빨라지면 조속기가 로프를 붙잡아 비상정지장치를 당깁니다.",
+ easy:"승강기의 속도 감시원입니다. 너무 빠르다 싶으면 먼저 전기를 끊고, 그래도 빠르면 비상 브레이크 줄을 잡아당깁니다.",
+ field:"기계실 바닥에 작은 도르래 장치(설정값 봉인 표시가 있음)가 있고, 가는 로프가 승강로 아래까지 늘어져 피트 바닥의 추 달린 인장 도르래에 걸립니다. MRL형은 승강로 위쪽에 붙어 있습니다.",
+ manage:["조속기 작동 시험은 업체 점검과 정기검사 항목입니다. 점검 기록에 조속기 항목이 빠지지 않았는지 봅니다.","봉인이 훼손돼 있으면 업체에 알립니다.","조속기 주변에 물건을 두지 않습니다."],
+ fault:"조속기가 작동해 카가 멈추면 승객은 갇힌 상태가 됩니다. 업체가 과속인지 오작동인지 원인을 확인하기 전에는 다시 운행하지 않습니다."},
+{n:6,t:"비상정지장치 · 가이드레일",a:"비상정지장치(세이프티 기어) · 가이드레일 · 가이드 슈 · UCMP",z:"safe",band:[3],tag:"비상정지",
+ role:"카 아래 틀에 붙은 비상정지장치는 조속기 로프가 당겨지면 쐐기(또는 롤러)를 가이드레일에 물려 카를 레일에 붙잡아 세웁니다. 가이드레일은 카와 균형추가 흔들리지 않고 곧게 오르내리게 길을 잡아 주고, 비상정지 때 그 힘을 받아 냅니다.",
+ easy:"철길 같은 레일을 따라 다니다가, 위급할 때 레일을 꽉 물어 버리는 집게입니다.",
+ field:"승강로 양옆 벽에 T자 모양 강철 레일이 층마다 브래킷으로 고정돼 있고, 카 바닥 아래 양쪽에 쐐기 장치가 있습니다. 균형추용 레일은 따로 한 쌍이 더 있습니다. 최근 승강기에는 문이 열린 채 카가 움직이면 세우는 개문출발방지장치(UCMP)도 들어갑니다.",
+ manage:["비상정지장치 작동 시험은 정기검사 항목입니다. 검사 결과서에서 확인합니다.","운행 중 카 흔들림, 덜컹거리는 소리 민원은 가이드 슈·레일 점검을 요청할 사유입니다.","레일 브래킷 풀림·녹은 업체 점검에서 확인합니다."],
+ fault:"비상정지장치가 물리면 카가 레일에 고정돼 전기를 넣어도 움직이지 않습니다. 해제와 복구는 반드시 업체가 원인을 확인한 뒤에 합니다."},
+{n:7,t:"카 · 카 도어 · 도어 안전장치",a:"카 · 카 도어 · 도어 머신 · 세이프티 슈 · 광전장치·라이트커튼",z:"car",band:[2],tag:"카·도어",
+ role:"카는 사람이 타는 상자입니다. 카 위의 도어 머신이 카 도어를 열고 닫으며, 층에 서면 카 도어에 붙은 걸쇠(도어 클러치)가 승강장 도어를 함께 끌어 엽니다. 닫히는 문에 사람이나 물건이 끼지 않도록 세이프티 슈(접촉식)와 광전장치·라이트커튼(빛 차단 감지)이 문을 다시 엽니다.",
+ easy:"승강기 문은 카 쪽 문이 ‘주인’이고 층 쪽 문은 ‘손님’입니다. 카가 와서 손을 잡아 줘야 층 문이 열립니다.",
+ field:"문 끝의 세로 고무 막대가 세이프티 슈이고, 문틀 양쪽의 촘촘한 센서 줄이 라이트커튼입니다. 카 안에는 층 버튼, 열림·닫힘 버튼, 비상통화 버튼이 있는 조작반과 정원·적재하중 표시가 있습니다. 모형에서 문이 열려 있을 때 붉은 선이 라이트커튼 빛입니다.",
+ manage:["문이 자꾸 다시 열리거나 덜컹거리면 센서 오염이나 문턱 홈의 이물질을 의심합니다.","문턱 홈에 낀 모래·작은 돌을 청소하고, 이사 때는 보호재를 설치하게 합니다.","카 조명, 환기팬, 버튼 표시가 정상인지 봅니다.","문을 손이나 물건으로 억지로 막지 말라는 안내문을 붙입니다."],
+ fault:"문 끼임 민원이 오면 즉시 운행을 멈추고 업체에 센서 점검을 요청합니다. 반려동물 줄이 문에 끼는 사고도 있어 줄을 짧게 잡도록 안내합니다."},
+{n:8,t:"승강장 도어 · 도어 인터록",a:"승강장 도어 · 도어 인터록(잠금 + 스위치) · 비상해제 열쇠 · 안전회로",z:"safe",band:[2,3],tag:"인터록",
+ role:"승강장 도어는 카가 그 층에 없으면 절대 열리지 않아야 합니다. 도어 인터록은 문을 기계적으로 잠그는 걸쇠와 잠김을 확인하는 전기 스위치가 한 몸이고, 모든 층의 인터록 스위치가 직렬로 이어져 어느 한 층 문이라도 열리면 승강기가 움직이지 않습니다. 승강로 추락 사고를 막는 핵심 장치입니다.",
+ easy:"층 문마다 달린 ‘자물쇠 겸 감시 스위치’입니다. 문 하나라도 덜 닫히면 승강기 전체가 멈춥니다.",
+ field:"걸쇠는 승강장 문 위쪽 승강로 안에 있어 밖에서는 보이지 않고, 문 위쪽에 작은 비상해제 열쇠 구멍이 보입니다. 모형에서 층마다 문 위의 붉은 상자가 인터록이고, 승강로 앞벽을 따라 올라가는 붉은 선이 안전회로입니다.",
+ manage:["비상해제 열쇠는 잠가서 보관하고 사용 대장을 두며, 교육받은 사람만 쓰게 합니다.","승강장 문을 발로 차거나 힘으로 벌리면 위험하다는 안내문을 붙입니다.","이삿짐·카트가 문에 부딪혀 문이 밀리거나 틈이 커지면 즉시 운행을 멈추고 점검을 요청합니다."],
+ fault:"카가 없는데 승강장 문이 열려 있으면 가장 위험한 상황입니다. 즉시 사람 접근을 막고(통제선·안내 인력), 운행을 정지시키고 업체를 부릅니다. 원인 확인 전에는 다시 운행하지 않습니다."},
+{n:9,t:"피트 · 완충기 · 리밋 스위치",a:"완충기 · 리밋/파이널 리밋 스위치 · 피트 정지 스위치 · 침수",z:"safe",band:[3],tag:"피트",
+ role:"승강로 맨 아래 공간이 피트입니다. 카나 균형추가 정상 정지 위치를 지나치면 먼저 리밋 스위치가 감속·정지시키고, 그래도 지나치면 파이널 리밋 스위치가 전원을 끊으며, 마지막으로 완충기가 충격을 받아 줍니다. 승강로 꼭대기 쪽에도 같은 원리의 스위치가 있습니다.",
+ easy:"맨 아래층 바닥 밑에 깔아 둔 ‘끝 표시선’과 ‘에어백’입니다.",
+ field:"피트 바닥에 카용·균형추용 완충기(스프링식이나 유압식), 피트 사다리, 피트 정지 스위치, 조속기 인장 도르래가 있습니다. 승강로 벽 위아래 끝에 리밋 스위치가 붙어 있습니다. 모형의 푸른 바닥은 물이 고인 상황을 나타냅니다.",
+ manage:["피트 누수·물 고임·쓰레기(전단지·담배꽁초)는 업체 점검 때 확인하고 청소를 요청합니다.","장마·태풍 전에 지하층 피트 배수를 확인합니다. 지하주차장까지 내려가는 승강기는 침수 위험이 큽니다.","피트 출입은 업체 기술자만 하도록 합니다."],
+ fault:"피트에 물이 차면 전기 장치가 잠겨 고장과 감전 위험이 생깁니다. 침수가 우려되면 업체와 협의해 카를 위층으로 올려 운행을 멈추고, 물이 빠진 뒤에도 점검 전에는 다시 운행하지 않습니다."},
+{n:10,t:"비상통화장치 · CCTV · 자동구출운전",a:"비상통화장치(인터폰) · 카 내 CCTV · ARD(배터리 구출운전)",z:"emer",band:[3],tag:"비상통화",
+ role:"카 안에 갇힌 사람이 버튼을 누르면 관리사무소·방재실과 유지관리업체 콜센터 같은 곳으로 통화할 수 있어야 합니다. CCTV는 카 안 상황을 보여 주고, 자동구출운전장치(ARD)는 정전 때 배터리 전원으로 카를 가까운 층까지 천천히 옮겨 문을 열어 줍니다.",
+ easy:"갇혔을 때 쓰는 ‘비상벨 + 눈 + 비상 배터리’입니다.",
+ field:"카 조작반의 종 모양 비상통화 버튼, 천장 구석의 돔 카메라, 관리사무소의 인터폰 주장치와 모니터, 기계실(MRL형은 최상층 제어반 근처)의 배터리 함이 한 세트입니다. ARD는 연식과 기종에 따라 없는 승강기도 많습니다.",
+ manage:["비상통화 버튼을 실제로 눌러 관리사무소와 외부 콜센터에 연결되는지 정기적으로 시험합니다.","인터폰 주장치의 주간·야간 응답 담당을 정해 둡니다.","CCTV 녹화 보관 기간과 열람 절차를 개인정보 보호 기준에 맞춰 운영합니다.","ARD가 있으면 배터리 교체 시기를 업체에 확인합니다."],
+ fault:"비상통화가 연결되지 않으면 갇힌 사람이 구조를 요청할 수 없는 중대한 결함입니다. 즉시 수리를 요청하고, 고칠 때까지 안내문을 붙이고 순회를 늘립니다. ARD가 작동했는데도 문이 열리지 않으면 13단계 순서로 대응합니다."},
+{n:11,t:"운행 관리 · 원격감시 · 고장 이력",a:"원격감시 단말 · 관리사무소 감시 화면 · 고장 이력 대장",z:"mgmt",band:[0],tag:"원격감시",
+ role:"제어반 신호를 통신망으로 유지관리업체 관제센터와 관리사무소 감시 화면에 보내 고장과 갇힘을 바로 알립니다. 고장 이력을 쌓아 두면 같은 고장이 반복되는 호기를 골라 부품 교체나 교체 공사(리모델링)를 계획할 근거가 됩니다.",
+ easy:"승강기의 ‘원격 심박계’와 ‘건강 기록부’입니다.",
+ field:"기계실 제어반 옆의 통신 단말, 관리사무소의 감시 화면(운행 층·방향·고장 표시)이 보입니다. 원격감시를 쓰지 않는 단지도 있습니다.",
+ manage:["고장마다 일시, 호기, 현상, 원인, 조치, 업체 도착 시각을 대장에 남깁니다.","같은 고장이 반복되면 업체에 근본 원인과 대책을 문서로 요청합니다.","유지관리 계약 때 고장 출동 시간 같은 조건을 확인합니다.","고장 통계를 장기수선계획의 승강기 교체 시기 판단 자료로 씁니다."],
+ fault:"통신이 끊기면 갇힘을 늦게 알게 됩니다. 감시 화면의 통신 이상 표시도 고장으로 보고 수리를 요청합니다."},
+{n:12,t:"법정 관리",a:"승강기 안전관리자 · 자체점검(월 1회) · 정기검사 · 사고 보고 · 책임보험",z:"mgmt",band:[0,1,2,3],tag:"법정 관리",
+ role:"승강기 안전관리법에 따라 관리주체는 승강기 안전관리자를 선임하고, 유지관리업체를 통해 대체로 월 1회 이상 자체점검을 하며, 검사기관의 정기검사(대체로 1년 주기)를 받아야 합니다. 중대한 사고나 고장이 나면 지체 없이 한국승강기안전공단에 알리고, 사고배상책임보험에 가입해 두어야 합니다.",
+ easy:"자동차의 정비소 점검·정기검사·보험을 승강기에 그대로 적용한 것입니다.",
+ field:"승강기 안전관리자는 대체로 관리소장이나 직원이 맡고 승강기 관리교육을 받습니다. 카 안이나 승강장에 검사합격증명(유효기간)과 비상연락처가 붙어 있습니다. 점검·검사 결과는 국가승강기정보센터(승강기안전종합정보망)에서 조회할 수 있습니다.",
+ manage:["안전관리자 선임·변경 신고와 교육 일정을 챙깁니다.","월 자체점검 결과가 정보망에 제때 입력되는지 확인하고 점검 기록에 서명합니다.","정기검사 일정을 미리 공지하고, 지적사항은 보완한 뒤 재검사를 받습니다.","책임보험 가입·갱신과 정보망 입력을 확인합니다.","설치 후 오래된 승강기는 정밀안전검사 대상인지, 검사 주기가 짧아지는지 확인합니다."],
+ fault:"정기검사에 불합격하거나 검사 기간이 지나면 그 승강기는 운행할 수 없습니다. 운행 정지를 공지하고 보완 공사 일정을 알립니다. 사고가 나면 현장과 기록을 보존하고 공단과 보험사에 알립니다."},
+{n:13,t:"갇힘 사고 대응",a:"인터폰 응대 · 위치 확인 · 업체·119 신고 · 임의 구출 금지 · 기록·보고",z:"emer",band:[2,3],tag:"갇힘 대응",
+ role:"카가 층 사이에 멈춰 사람이 갇히면 관리사무소는 승객을 안심시키고 정확한 위치를 확인해 유지관리업체와 119에 알립니다. 구출은 교육받은 업체 기술자나 소방대원이 하고, 관리사무소가 승강장 문을 억지로 열어 꺼내는 일은 하지 않습니다.",
+ easy:"갇힌 사람에게는 ‘곧 구조됩니다’라는 목소리가 가장 큰 도움입니다. 문은 전문가가 엽니다.",
+ field:"카에는 환기구가 있어 갇혀도 숨이 막힐 위험은 크지 않습니다. 오히려 억지로 문을 열고 나오다 승강로로 떨어지는 사고가 더 위험합니다. 구출할 때는 주전원을 끄고 브레이크를 수동으로 풀어 카를 가까운 층으로 옮기는 방법 등을 씁니다. 모형의 카는 층 사이에 멈춘 상태입니다.",
+ manage:["갇힘 대응 순서를 인터폰 주장치 옆에 붙여 둡니다.","동·호기 번호와 위치표, 야간·휴일 업체 연락처를 최신으로 유지합니다.","1년에 한 번쯤 직원 모의훈련을 합니다."],
+ fault:"환자·임산부·어린이가 있거나 공황 증상, 화재·침수가 겹치면 119에 먼저 알리고 상황을 정확히 전합니다. 구출 뒤에는 승객 상태를 확인하고, 업체가 원인을 확인하기 전에는 다시 운행하지 않으며, 기록을 남기고 중대한 사고면 보고합니다."}
+];
+const N = STEPS.length;
+const GLOSS = [["MCCB","배선용 차단기(주전원 차단기)","Molded Case Circuit Breaker"],["ATS","자동절체개폐기","Automatic Transfer Switch"],["GEN","비상발전기","Generator"],["LOTO","잠금·표찰(작업 중 전원 투입 방지)","Lockout / Tagout"],["VVVF","가변전압 가변주파수 제어","Variable Voltage Variable Frequency"],["INV","인버터(속도 제어장치)","Inverter"],["MRL","기계실 없는 승강기","Machine Room-Less"],["CWT","균형추","Counterweight"],["GOV","조속기","Governor"],["UCMP","개문출발방지장치","Unintended Car Movement Protection"],["ARD","자동구출운전장치","Automatic Rescue Device"],["CCTV","폐쇄회로 카메라","Closed-Circuit Television"]];
+const EN = Object.fromEntries(GLOSS.map(g=>[g[0],g[2]]));
+const STEP_EN = {1:["Elevator Power Feeder","MCCB","ATS","GEN"],2:["Elevator Controller","VVVF","INV","MRL","Safety Circuit"],3:["Traction Machine","Traction Sheave","Brake","Gearless"],4:["Hoist Rope","CWT","Rope Socket"],5:["GOV","Overspeed Switch","Governor Rope","Tension Pulley"],6:["Safety Gear","Guide Rail","Guide Shoe","UCMP"],7:["Car","Car Door","Door Operator","Safety Shoe","Light Curtain"],8:["Landing Door","Door Interlock","Emergency Unlocking Key","Safety Circuit"],9:["Pit","Buffer","Limit Switch","Final Limit Switch"],10:["Emergency Intercom","CCTV","ARD"],11:["Remote Monitoring","Fault Log"],12:["Elevator Safety Manager","Self-Inspection","Periodic Inspection","Liability Insurance"],13:["Passenger Entrapment Rescue"]};
+function enLine(n){return (STEP_EN[n]||[]).map(k=>EN[k]?`${k} (${EN[k]})`:k).join(" · ");}
+
+// ───────── 패널·내비 ─────────
+const $ = s => document.querySelector(s);
+let cur = 1;
+const prog = $("#progress");
+prog.style.setProperty("--n", N);
+STEPS.forEach(s=>{const b=document.createElement("button");b.type="button";b.setAttribute("aria-label",s.n+"단계 "+s.t);b.style.setProperty("--c",ZONE[s.z].c);b.onclick=()=>{stopTour();select(s.n);};prog.appendChild(b);});
+$("#gloss").innerHTML = GLOSS.map(g=>`<dt>${g[0]}</dt><dd>${g[1]} <span class="en">${g[2]}</span></dd>`).join("");
+
+function renderPanel(){
+  const s = STEPS[cur-1], z = ZONE[s.z];
+  const panel = $("#panel"); panel.style.setProperty("--c", z.c);
+  $("#pNum").textContent = String(s.n).padStart(2,"0")+" / "+String(N).padStart(2,"0");
+  $("#pZone").textContent = z.n; $("#pZone").style.setProperty("--c", z.c);
+  $("#pTitle").textContent = s.t; $("#pAbbr").textContent = s.a; $("#pEn").textContent = enLine(s.n);
+  $("#pBody").innerHTML =
+    `<section><h4>역할</h4><p>${s.role}</p></section>
+     <section class="easy"><h4>쉽게 말하면</h4><p>${s.easy}</p></section>
+     <section><h4>현장에서는</h4><p>${s.field}</p></section>
+     <section><h4>관리 포인트</h4><ul>${s.manage.map(m=>`<li>${m}</li>`).join("")}</ul></section>
+     <section class="fault"><h4>고장·사고 시</h4><p>${s.fault}</p></section>`;
+  $("#pBody").scrollTop = 0;
+  [...prog.children].forEach((b,i)=>{b.classList.toggle("on",i+1===cur);b.classList.toggle("done",i+1<cur);b.style.setProperty("--c",ZONE[STEPS[i].z].c);});
+  $("#prev").disabled = cur===1; $("#next").textContent = cur===N ? "처음으로" : "다음";
+  $("#navHint").textContent = cur<N ? "다음: "+STEPS[cur].t : "";
+  document.querySelectorAll("#band div").forEach(d=>d.classList.toggle("on", s.band.includes(+d.dataset.b)));
+  document.querySelectorAll("#sld .node").forEach(g=>g.classList.toggle("on", +g.dataset.n===cur));
+  document.querySelectorAll(".tag").forEach(t=>{t.classList.toggle("on",+t.dataset.n===cur);});
+}
+$("#prev").onclick=()=>{stopTour(); if(cur>1) select(cur-1);};
+$("#next").onclick=()=>{stopTour(); select(cur===N?1:cur+1);};
+document.addEventListener("keydown",e=>{
+  if(e.target.closest && e.target.closest("input,textarea,select")) return;
+  if(e.key==="ArrowRight"){stopTour(); select(cur===N?1:cur+1);} else if(e.key==="ArrowLeft"&&cur>1){stopTour(); select(cur-1);}
+});
+
+// ───────── 2D 승강기 계통도 ─────────
+(function buildSLD(){
+  const svg = $("#sld");
+  const P = {1:[60,72],2:[200,72],3:[340,72],4:[480,72],7:[620,72],8:[760,72],
+             11:[60,188],10:[200,188],5:[340,188],6:[480,188],9:[620,188],13:[760,188],12:[925,130]};
+  const X={},Y={}; Object.keys(P).forEach(k=>{X[k]=P[k][0];Y[k]=P[k][1];});
+  const zc = n=>ZONE[STEPS[n-1].z].c;
+  let h="";
+  const seg=(x1,y1,x2,y2,c,dash)=>`<line x1="${x1}" y1="${y1}" x2="${x2}" y2="${y2}" stroke="${c}" stroke-width="2.6" ${dash?'stroke-dasharray="5 4"':''}/>`;
+  const poly=(pts,c,dash)=>`<polyline points="${pts.map(p=>p.join(",")).join(" ")}" fill="none" stroke="${c}" stroke-width="2.2" ${dash?'stroke-dasharray="5 4"':''}/>`;
+  // 윗줄: 전원 → 제어 → 권상기 → 로프 → 카 → 승강장 도어
+  h+=seg(X[1]+37,Y[1],X[2]-37,Y[2],"var(--pwr)");
+  h+=seg(X[2]+37,Y[2],X[3]-37,Y[3],"var(--pwr)");
+  h+=seg(X[3]+37,Y[3],X[4]-37,Y[4],"var(--rope)");
+  h+=seg(X[4]+37,Y[4],X[7]-37,Y[7],"var(--rope)");
+  h+=seg(X[7]+37,Y[7],X[8]-37,Y[8],"var(--rope)",true);
+  // 인터록 안전회로 → 제어반 (직렬)
+  h+=poly([[X[8],Y[8]-20],[X[8],32],[X[2],32],[X[2],Y[2]-20]],"var(--safe)",true);
+  h+=`<text x="${(X[2]+X[8])/2}" y="26" text-anchor="middle" class="nm">도어 인터록·안전장치 스위치 → 직렬 안전회로 (하나라도 끊기면 정지)</text>`;
+  // 제어반 → 원격감시, ARD
+  h+=poly([[X[2]-34,Y[2]+20],[X[2]-34,140],[X[11],140],[X[11],Y[11]-20]],"var(--ctl)");
+  h+=seg(X[2]+34,Y[2]+20,X[10]+34,Y[10]-20,"var(--pwr)",true);
+  h+=`<text x="${X[2]+40}" y="138" class="nm">정전 시 배터리</text>`;
+  // 조속기 → 비상정지 → 카, 카 → 피트
+  h+=seg(X[5]+37,Y[5],X[6]-37,Y[6],"var(--safe)");
+  h+=seg(X[6]+22,Y[6]-20,X[7]-34,Y[7]+20,"var(--safe)");
+  h+=seg(X[7]+34,Y[7]+20,X[9]+34,Y[9]-20,"var(--safe)",true);
+  h+=`<text x="${(X[5]+X[6])/2}" y="${Y[5]-8}" text-anchor="middle" class="nm">로프 당김</text>`;
+  h+=`<text x="${X[7]+40}" y="138" class="nm">지나치면</text>`;
+  // 공통 관리
+  h+=`<text x="${X[12]}" y="${Y[12]-34}" text-anchor="middle" class="nm">전 계통 공통</text>`;
+  const AB={1:"MCCB·ATS",2:"제어반",3:"권상기",4:"로프·CWT",5:"GOV",6:"비상정지",7:"카·도어",8:"인터록",9:"피트",10:"ARD·통화",11:"원격감시",12:"법정관리",13:"갇힘 대응"};
+  const NM={1:"동력 전원",2:"VVVF 제어",3:"전동기·시브·브레이크",4:"주로프·균형추",5:"조속기",6:"가이드레일",7:"카 도어·센서",8:"승강장 도어",9:"완충기·리밋",10:"비상통화·CCTV",11:"고장 이력",12:"점검·검사·보험",13:"구출 절차"};
+  for(let n=1;n<=N;n++){
+    h+=`<g class="node" data-n="${n}" style="--c:${zc(n)}" tabindex="0" role="button" aria-label="${n}단계 ${STEPS[n-1].t}">
+      <rect x="${X[n]-37}" y="${Y[n]-20}" width="74" height="40" rx="6"/>
+      <circle cx="${X[n]-37}" cy="${Y[n]-20}" r="9" fill="${zc(n)}"/><text x="${X[n]-37}" y="${Y[n]-16.5}" text-anchor="middle" class="num">${n}</text>
+      <text x="${X[n]}" y="${Y[n]+4.5}" text-anchor="middle" class="ab">${AB[n]}</text>
+      <text x="${X[n]}" y="${Y[n]+37}" text-anchor="middle" class="nm">${NM[n]}</text></g>`;
+  }
+  svg.innerHTML=h;
+  svg.querySelectorAll(".node").forEach(g=>{
+    const go=()=>{stopTour();select(+g.dataset.n);document.querySelector(".stage").scrollIntoView({behavior:matchMedia("(prefers-reduced-motion: reduce)").matches?"auto":"smooth",block:"start"});};
+    g.addEventListener("click",go); g.addEventListener("keydown",e=>{if(e.key==="Enter"||e.key===" "){e.preventDefault();go();}});
+  });
+})();
+
+// ───────── 3D ─────────
+const REDUCE = matchMedia("(prefers-reduced-motion: reduce)").matches;
+const view = $("#view"), canvas = $("#c"), labelsEl = $("#labels");
+let three = null;
+let tour = null;
+function stopTour(){ if(tour){clearInterval(tour);tour=null;$("#btnTour").setAttribute("aria-pressed","false");$("#btnTour").textContent="자동 투어";} }
+
+function select(n, opts){
+  cur = n; renderPanel();
+  try{ history.replaceState(null,"","#s"+n); }catch(e){}
+  if(three) three.focus(n, opts);
+}
+
+function init3D(){
+  if(!window.THREE || !THREE.OrbitControls) throw new Error("three");
+  const V = (x,y,z)=>new THREE.Vector3(x,y,z);
+  const renderer = new THREE.WebGLRenderer({canvas, antialias:true});
+  renderer.setPixelRatio(Math.min(window.devicePixelRatio||1, 2));
+  renderer.shadowMap.enabled = true; renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+  const scene = new THREE.Scene();
+  const camera = new THREE.PerspectiveCamera(40, 1, 0.1, 600);
+  const controls = new THREE.OrbitControls(camera, canvas);
+  controls.enableDamping = true; controls.dampingFactor = .08; controls.maxDistance = 160; controls.minDistance = 2;
+  controls.maxPolarAngle = Math.PI*0.66;
+
+  scene.add(new THREE.HemisphereLight(0xffffff, 0x8a8c96, .78));
+  const sun = new THREE.DirectionalLight(0xffffff, .82);
+  sun.position.set(-30, 70, 45); sun.castShadow = true;
+  sun.shadow.mapSize.set(2048,2048);
+  Object.assign(sun.shadow.camera,{left:-45,right:45,top:45,bottom:-45,near:10,far:200});
+  scene.add(sun);
+
+  const COL = {pwr:0xe0841c, ctl:0x8a5ce0, rope:0x8d98a2, safe:0xd8342a};
+  const pickables = [], groups = {}, anchors = {}, doors = [], edgeMats = [], stepMeshes = {};
+  for(let i=1;i<=N;i++){groups[i]=new THREE.Group();scene.add(groups[i]);stepMeshes[i]=[];}
+  const mat = (color,o={}) => new THREE.MeshStandardMaterial(Object.assign({color,roughness:.7,metalness:.12},o));
+  const glass = (color,op) => new THREE.MeshStandardMaterial({color,transparent:true,opacity:op,depthWrite:false,roughness:.3});
+  function mesh(geo,m,x,y,z){const o=new THREE.Mesh(geo,m);o.position.set(x||0,y||0,z||0);return o;}
+  function box(w,h,d,c,x,y,z,o){const m=mesh(new THREE.BoxGeometry(w,h,d),typeof c==="number"?mat(c,o):c,x,y,z);m.castShadow=true;m.receiveShadow=true;return m;}
+  function cyl(r1,r2,h,c,x,y,z,seg){const m=mesh(new THREE.CylinderGeometry(r1,r2,h,seg||18),typeof c==="number"?mat(c):c,x,y,z);m.castShadow=true;return m;}
+  function edges(obj,op,parent){const l=new THREE.LineSegments(new THREE.EdgesGeometry(obj.geometry),new THREE.LineBasicMaterial({transparent:true,opacity:op||.55}));l.position.copy(obj.position);edgeMats.push(l.material);(parent||scene).add(l);return l;}
+  function reg(step,obj,parent){(parent||groups[step]).add(obj);obj.traverse(o=>{if(o.isMesh){o.userData.step=step;pickables.push(o);stepMeshes[step].push(o);}});return obj;}
+  function path(pts){const p=new THREE.CurvePath();for(let i=0;i<pts.length-1;i++)p.add(new THREE.LineCurve3(pts[i],pts[i+1]));return p;}
+  const flows=[];
+  // 전선·신호선(흐름 입자 포함). noFlow면 입자 없이 선만 그림
+  function cable(step,pts,color,r,speed,noFlow){
+    r=r||.06;
+    const c=path(pts), len=c.getLength();
+    const tube=new THREE.Mesh(new THREE.TubeGeometry(c,Math.max(8,Math.round(len*3)),r,8,false),mat(color,{roughness:.5}));
+    tube.castShadow=true; reg(step,tube);
+    if(noFlow) return c;
+    const k=Math.max(2,Math.round(len/1.6)), pm=new THREE.MeshBasicMaterial({color:new THREE.Color(color).lerp(new THREE.Color(0xffffff),.5)});
+    const geo=new THREE.SphereGeometry(Math.max(.07,r*1.9),10,8);
+    for(let i=0;i<k;i++){const s=new THREE.Mesh(geo,pm);scene.add(s);flows.push({s,c,len,off:i/k,speed:speed||2});}
+    return c;
+  }
+  const pipe=(step,pts,color,r)=>cable(step,pts,color,r,0,true);
+
+  // ── 치수 ──
+  const FH=2.4, NF=10, HT=NF*FH;           // 층고, 층수, 옥상 높이(24)
+  const SX0=-1.8, SX1=1.8, SZ0=-1.6, SZ1=1.4; // 승강로 안쪽
+  const PIT=-1.6, MRF=25.6;                 // 피트 바닥, 기계실 바닥
+  const CX=-0.4;                            // 카 중심 x (카 폭 2.0, 깊이 2.0)
+  const WX=1.3;                             // 균형추 중심 x
+  const SHV={x:.45,y:26.6,r:.85};           // 메인 시브
+  const GX=-1.7, GZ=.8, GR=.3;              // 조속기 위치
+
+  // 지면
+  const groundMat = new THREE.MeshStandardMaterial({color:0xc7cad1,transparent:true,opacity:.9,roughness:1,depthWrite:false});
+  const ground = mesh(new THREE.PlaneGeometry(200,140),groundMat,0,0,0);
+  ground.rotation.x=-Math.PI/2; ground.receiveShadow=true; ground.renderOrder=2; scene.add(ground);
+
+  // 아파트 동(반투명) · 층 슬래브(승강로 구멍)
+  const bld=mesh(new THREE.BoxGeometry(16,HT,10),glass(0xd5d8de,.06),0,HT/2,-1); bld.renderOrder=6; scene.add(bld); edges(bld,.6);
+  const slabM=glass(0xbfc3cc,.2);
+  function slab(y){
+    [[-8,SX0,-6,4],[SX1,8,-6,4],[SX0,SX1,-6,SZ0],[SX0,SX1,SZ1+.1,4]].forEach(r=>{
+      const s=mesh(new THREE.BoxGeometry(r[1]-r[0],.12,r[3]-r[2]),slabM,(r[0]+r[1])/2,y,(r[2]+r[3])/2); s.renderOrder=4; scene.add(s);});
+  }
+  for(let f=1;f<=NF;f++) slab(f*FH);
+  // 승강로 벽(아주 옅게) — 피트부터 기계실 바닥까지
+  const shaft=mesh(new THREE.BoxGeometry(SX1-SX0,MRF-.2-PIT,SZ1-SZ0),glass(0x8e95a3,.05),(SX0+SX1)/2,(PIT+MRF-.2)/2,(SZ0+SZ1)/2); shaft.renderOrder=5; scene.add(shaft); edges(shaft,.4);
+  scene.add(box(SX1-SX0,.15,SZ1-SZ0,0x8f939a,(SX0+SX1)/2,PIT-.075,(SZ0+SZ1)/2));
+  // 옥상 기계실
+  const mr=mesh(new THREE.BoxGeometry(8,5,6),glass(0xcdd0d8,.08),0,HT+2.5,0); mr.renderOrder=6; scene.add(mr); edges(mr,.65);
+  const mrFloor=mesh(new THREE.BoxGeometry(8,.2,6),glass(0x9ea2aa,.55),0,MRF-.1,0); mrFloor.renderOrder=3; scene.add(mrFloor); edges(mrFloor,.4);
+  scene.add(box(.9,1.9,.06,0x6c717a,4.0,MRF+.95,1.6)); // 기계실 출입문
+
+  // 큐비클(함): 문 열림 재사용
+  const PANEL=0xb3b6be;
+  function cubicle(step,x,y,z,w,h,inner,front){
+    const g=new THREE.Group(); g.position.set(x,y,z);
+    const d=.8;
+    g.add(box(w,h,.06,PANEL,0,h/2+.12,-d/2)); g.add(box(.06,h,d,PANEL,-w/2,h/2+.12,0)); g.add(box(.06,h,d,PANEL,w/2,h/2+.12,0));
+    g.add(box(w,.06,d,PANEL,0,h+.12,0)); g.add(box(w,.14,d,0x5e626a,0,.07,0));
+    if(inner) inner(g,h);
+    const pivot=new THREE.Group(); pivot.position.set(-w/2,0,d/2+.03); g.add(pivot);
+    const door=box(w-.02,h-.04,.05,PANEL,w/2,h/2+.12,0); pivot.add(door);
+    pivot.add(box(.05,.3,.08,0x333333,w-.14,h*.55,.05));
+    if(front) front(pivot,w,h);
+    doors.push({pivot,step,a:0});
+    reg(step,g); return g;
+  }
+  const lamp=(p,x,y,c)=>{p.add(mesh(new THREE.SphereGeometry(.06,10,8),mat(c,{emissive:c,emissiveIntensity:.6}),x,y,.06));};
+  const lcd=(p,x,y)=>{p.add(box(.5,.34,.08,0x23272a,x,y,.06));p.add(box(.4,.2,.02,0x9b8cff,x,y+.02,.11,{emissive:0x4a3aa8}));};
+
+  // ── 1. 동력 전원: 전기실 저압반·ATS(지상 표현) · 비상발전기 → 기계실 주전원 차단기 ──
+  cubicle(1,-12,0,-3,1.6,2.2,(g,h)=>{[-.4,0,.4].forEach(x=>g.add(box(.28,.5,.3,0x2a2e31,x,1.5,-.2)));g.add(box(1.2,.5,.3,0x3a3f45,0,.75,-.2));},
+    (p,w,h)=>{lamp(p,w/2-.3,h-.15,0xe23a2e);lamp(p,w/2,h-.15,0x2fb05f);lamp(p,w/2+.3,h-.15,0xf2c230);p.add(box(1.1,.12,.02,0xffffff,w/2,h+.02,.04));});
+  reg(1,box(2.7,.2,1.5,0x3a3e40,-15.5,.1,-3));
+  reg(1,box(2.4,1.3,1.3,0x2f7a4c,-15.5,.85,-3,{metalness:.3}));
+  reg(1,cyl(.12,.12,1.4,0x6a6a6a,-14.6,2.2,-3.4,10));
+  cable(1,[V(-24,-.8,-3.1),V(-11.6,-.8,-3.1),V(-11.6,.15,-3.1)],COL.pwr,.08,2.2);
+  cable(1,[V(-15.9,1.5,-2.9),V(-15.9,2.7,-2.9),V(-12.4,2.7,-2.9),V(-12.4,2.32,-2.9)],COL.pwr,.07,1.8);
+  cable(1,[V(-11.6,2.32,-3.2),V(-11.6,2.9,-3.2),V(-8.3,2.9,-3.2),V(-8.3,24.15,-3.2),V(-8.3,24.15,-.6),V(-4.1,24.15,-.6),V(-4.1,26.8,-.6),V(-3.97,26.8,-.6)],COL.pwr,.08,3);
+  reg(1,box(.25,.8,.6,0x8d9098,-3.85,26.8,-.6));
+  reg(1,box(.06,.18,.08,0x23272a,-3.7,26.85,-.6));
+  anchors[1]=V(-12,2.9,-2.6);
+
+  // ── 2. 제어반 (기계실) ──
+  cubicle(2,-2.6,MRF,-2.1,1.3,2.2,(g,h)=>{g.add(box(.9,1.0,.3,0x2a2e31,0,1.55,-.2));g.add(box(.9,.4,.25,0x3c3550,0,.7,-.2));},
+    (p,w,h)=>{lcd(p,w/2,h-.2);lamp(p,w/2-.3,h-.55,0x2fb05f);lamp(p,w/2,h-.55,0xf2c230);lamp(p,w/2+.3,h-.55,0xe23a2e);});
+  cable(2,[V(-3.7,26.6,-.6),V(-3.7,28.2,-.6),V(-2.6,28.2,-.6),V(-2.6,28.2,-2.1),V(-2.6,MRF+2.32,-2.1)],COL.pwr,.06,1.6);
+  anchors[2]=V(-2.6,MRF+2.7,-1.7);
+
+  // ── 3. 권상기: 전동기 · 시브 · 브레이크 ──
+  (function(){
+    const rx=Math.PI/2;
+    const sh=cyl(SHV.r,SHV.r,.36,0x5b6168,SHV.x,SHV.y,0,32); sh.rotation.x=rx; reg(3,sh);
+    [-.12,0,.12].forEach(z=>{const g=mesh(new THREE.TorusGeometry(SHV.r,.025,6,40),mat(0x2a2e33),SHV.x,SHV.y,z);reg(3,g);});
+    const hub=cyl(.25,.25,.5,0x3a3f45,SHV.x,SHV.y,0,16); hub.rotation.x=rx; reg(3,hub);
+    const drum=cyl(.55,.55,.25,0x7c838b,SHV.x,SHV.y,-.35,24); drum.rotation.x=rx; reg(3,drum);
+    [-1,1].forEach(s=>{reg(3,box(.18,.5,.25,0xc0392b,SHV.x+s*.65,SHV.y,-.35));reg(3,box(.1,.1,.25,0x23272a,SHV.x+s*.8,SHV.y+.32,-.35));});
+    reg(3,box(1.5,.12,.25,0x23272a,SHV.x,SHV.y+.6,-.35));
+    const mot=cyl(.62,.62,1.1,0x3d4f7a,SHV.x,SHV.y,-1.05,28); mot.rotation.x=rx; reg(3,mot);
+    const enc=cyl(.18,.18,.12,0x23272a,SHV.x,SHV.y,-1.66,14); enc.rotation.x=rx; reg(3,enc);
+    reg(3,box(1.5,.4,1.3,0x4a4e55,SHV.x,MRF+.2,-1.05));
+    // 시브를 넘어가는 로프 (정지 표현)
+    [-.12,0,.12].forEach(z=>{const a=mesh(new THREE.TorusGeometry(SHV.r+.03,.028,6,24,Math.PI),mat(0x4f575e),SHV.x,SHV.y,z);reg(4,a);});
+  })();
+  cable(3,[V(-2.2,MRF+2.32,-2.2),V(-2.2,28.35,-2.2),V(SHV.x,28.35,-2.2),V(SHV.x,28.35,-1.05),V(SHV.x,SHV.y+.62,-1.05)],COL.pwr,.06,1.6);
+  anchors[3]=V(SHV.x,SHV.y+1.2,-.3);
+
+  // ── 6. 가이드레일 (카용 2, 균형추용 2) ──
+  const RH=MRF-.2-PIT, RY=(PIT+MRF-.2)/2;
+  [[-1.55,-1],[.75,1]].forEach(([x,s])=>{  // 카 레일: 날이 카 쪽(x)을 향함
+    reg(6,box(.04,RH,.16,0x6d737b,x-s*.05,RY,0,{metalness:.5}));
+    reg(6,box(.1,RH,.03,0x6d737b,x+s*.02,RY,0,{metalness:.5}));
+  });
+  [-.72,.72].forEach(z=>{const s=Math.sign(z);
+    reg(6,box(.16,RH,.04,0x6d737b,WX,RY,z+s*.05,{metalness:.5}));
+    reg(6,box(.03,RH,.1,0x6d737b,WX,RY,z-s*.02,{metalness:.5}));
+  });
+  for(let f=0;f<=NF;f++){const y=f*FH-.3; if(y<PIT+.2) continue;
+    reg(6,box(.2,.08,.2,0x555a61,-1.7,y,0));
+    reg(6,box(.08,.08,1.52,0x555a61,.75,y,-.84));
+    [-.72,.72].forEach(z=>reg(6,box(.5,.08,.08,0x555a61,1.55,y,z)));
+  }
+
+  // ── 7. 카 (움직이는 그룹) ──
+  const carG=new THREE.Group(); scene.add(carG);
+  const wallM=()=>glass(0xb9bfc8,.32);
+  reg(7,box(2.0,.16,2.0,0x6b7178,0,-.08,0),carG);
+  [[2.0,2.3,.04,0,1.15,-.98],[.04,2.3,2.0,-.98,1.15,0],[.04,2.3,2.0,.98,1.15,0]].forEach(a=>{const w=mesh(new THREE.BoxGeometry(a[0],a[1],a[2]),wallM(),a[3],a[4],a[5]);w.renderOrder=8;reg(7,w,carG);edges(w,.5,carG);});
+  reg(7,box(2.0,.08,2.0,0xd5d8dc,0,2.34,0),carG);
+  reg(7,box(.45,2.3,.05,0x9aa1a8,-.775,1.15,1.0,{metalness:.4}),carG);
+  reg(7,box(.45,2.3,.05,0x9aa1a8,.775,1.15,1.0,{metalness:.4}),carG);
+  reg(7,box(1.1,.2,.05,0x9aa1a8,0,2.2,1.0,{metalness:.4}),carG);
+  const carDoor=[-1,1].map(s=>{const d=box(.54,2.1,.04,0xaab1b8,s*.27,1.05,1.08,{metalness:.5});reg(7,d,carG);
+    d.add(box(.03,1.9,.05,0x1e1e1e,-s*.255,0,.02)); return d;});   // 문 끝 세이프티 슈
+  [-1,1].forEach(s=>reg(7,box(.04,1.9,.04,0x1c1c1c,s*.57,1.05,1.1),carG)); // 라이트커튼 기둥
+  const beams=new THREE.Group(); carG.add(beams);
+  const beamM=new THREE.MeshBasicMaterial({color:0xff3b30,transparent:true,opacity:.75});
+  for(let i=0;i<9;i++) beams.add(mesh(new THREE.BoxGeometry(1.1,.012,.012),beamM,0,.2+i*.2,1.1));
+  reg(7,box(2.2,.06,.06,0x3a3f45,0,2.25,1.12),carG);
+  reg(7,box(1.4,.25,.35,0x3a3f45,0,2.52,.78),carG);           // 도어 머신
+  reg(7,cyl(.1,.1,.25,0x23272a,.55,2.52,.6,12),carG);
+  reg(7,box(1.1,.6,.03,0x8c9299,0,-.38,1.0),carG);            // 에이프런
+  // 카 틀(상부 체대·하부 체대·세로 틀)
+  [-1,1].forEach(s=>reg(7,box(.08,3.0,.12,0x50555c,s*1.04,1.2,0),carG));
+  reg(7,box(2.2,.16,.16,0x50555c,0,2.75,0),carG);
+  reg(7,box(.3,.18,.3,0x2a2e33,0,2.9,0),carG);                // 로프 소켓
+  reg(7,box(2.2,.16,.16,0x50555c,0,-.26,0),carG);
+  [-1,1].forEach(s=>{[2.62,-.12].forEach(y=>reg(7,box(.14,.2,.16,0x2a2e33,s*1.12,y,0),carG));}); // 가이드 슈
+  // 6. 비상정지장치(카 하부, 레일을 감쌈)
+  [-1,1].forEach(s=>reg(6,box(.26,.32,.3,0x9c3a33,s*1.13,-.44,0,{metalness:.3}),carG));
+  // 조작반 · 비상통화 · CCTV (10)
+  reg(7,box(.22,.9,.03,0x3a3f45,.78,1.25,.955),carG);
+  reg(10,cyl(.05,.05,.03,0xf2c230,.78,1.0,.935,14).rotateX(Math.PI/2),carG);
+  reg(10,box(.12,.08,.02,0x23272a,.78,.86,.94),carG);
+  reg(10,mesh(new THREE.SphereGeometry(.09,14,8,0,Math.PI*2,0,Math.PI/2),mat(0x23272a),.82,2.3,-.82).rotateX(Math.PI),carG);
+  // 조속기 연결 레버(카 → 조속기 로프)
+  reg(5,box(.06,.06,.5,0xc0392b,-1.04,-.12,.25),carG);
+  reg(5,box(.3,.06,.06,0xc0392b,-1.17,-.12,.5),carG);
+  // 리밋 스위치용 캠
+  reg(9,box(.04,.8,.04,0xf2c230,-.6,1.0,-1.04),carG);
+  // 승객(13)
+  reg(13,cyl(.16,.18,1.0,0x4f6d8f,-.3,.6,-.2,14),carG);
+  reg(13,mesh(new THREE.SphereGeometry(.14,14,10),mat(0xe2c09e),-.3,1.26,-.2),carG);
+
+  // ── 4. 균형추 (움직이는 그룹) · 주로프 ──
+  const cwG=new THREE.Group(); scene.add(cwG);
+  [-.56,.56].forEach(z=>reg(4,box(.5,2.4,.08,0x50555c,0,1.2,z),cwG));
+  for(let i=0;i<11;i++) reg(4,box(.44,.17,1.04,0x6e757d,0,.15+i*.2,0),cwG);
+  reg(4,box(.5,.12,1.2,0x50555c,0,2.4,0),cwG);
+  reg(4,box(.22,.14,.22,0x2a2e33,0,2.53,0),cwG);
+  [-1,1].forEach(s=>[2.2,.2].forEach(y=>reg(4,box(.18,.18,.12,0x2a2e33,0,y,s*.64),cwG)));
+  const ropeGeo=new THREE.CylinderGeometry(.028,.028,1,6), ropes=[];
+  [-.12,0,.12].forEach(z=>{
+    const a=mesh(ropeGeo,mat(0x4f575e,{metalness:.5}),CX,0,z); reg(4,a); ropes.push({m:a,car:true});
+    const b=mesh(ropeGeo,mat(0x4f575e,{metalness:.5}),WX,0,z); reg(4,b); ropes.push({m:b,car:false});
+  });
+
+  // ── 5. 조속기 · 조속기 로프 · 피트 인장 도르래 ──
+  (function(){
+    const gs=cyl(GR,GR,.14,0x5b6168,GX,26.25,GZ,24); gs.rotation.z=Math.PI/2; reg(5,gs);
+    const ga=mesh(new THREE.TorusGeometry(GR+.02,.02,6,20,Math.PI),mat(0x4f575e),GX,26.25,GZ); ga.rotation.y=Math.PI/2; reg(5,ga);
+    const ax=cyl(.05,.05,.35,0x23272a,GX+.17,26.25,GZ,8); ax.rotation.z=Math.PI/2; reg(5,ax);
+    reg(5,box(.3,.65,.36,0xc0392b,GX+.32,MRF+.325,GZ));
+    reg(5,box(.2,.18,.2,0x23272a,GX+.32,MRF+.78,GZ));
+    reg(5,box(.06,.12,.06,0xf2c230,GX+.45,MRF+.5,GZ+.2)); // 봉인
+    const ts=cyl(GR,GR,.12,0x5b6168,GX,-1.0,GZ,24); ts.rotation.z=Math.PI/2; reg(5,ts);
+    reg(5,box(.12,.5,.1,0x50555c,GX+.12,-1.0,GZ));
+    reg(5,box(.2,.2,.3,0x3a3f45,GX+.12,-1.35,GZ));
+    [GZ-GR,GZ+GR].forEach(z=>pipe(5,[V(GX,26.25,z),V(GX,-1.0,z)],0x5f666d,.02));
+  })();
+  anchors[5]=V(GX,26.9,GZ);
+
+  // ── 8. 승강장 도어 · 인터록 (층마다) ──
+  const LD=[];
+  const lwM=glass(0xd7d9df,.28);
+  for(let f=1;f<=NF;f++){
+    const y0=(f-1)*FH;
+    [[SX0,CX-.55],[CX+.55,SX1]].forEach(r=>{const w=mesh(new THREE.BoxGeometry(r[1]-r[0],FH-.12,.1),lwM,(r[0]+r[1])/2,y0+(FH-.12)/2+.06,SZ1+.05);w.renderOrder=7;reg(8,w);});
+    const hd=mesh(new THREE.BoxGeometry(1.1,FH-.12-2.1,.1),lwM,CX,y0+2.1+(FH-.12-2.1)/2+.06,SZ1+.05); hd.renderOrder=7; reg(8,hd);
+    [-1,1].forEach(s=>reg(8,box(.06,2.12,.14,0x8a9098,CX+s*.58,y0+1.06,SZ1+.05,{metalness:.4})));
+    reg(8,box(1.22,.06,.14,0x8a9098,CX,y0+2.13,SZ1+.05,{metalness:.4}));
+    const panels=[-1,1].map(s=>reg(8,box(.55,2.08,.04,0xa7aeb6,CX+s*.28,y0+1.05,SZ1-.04,{metalness:.5})));
+    reg(8,box(.32,.1,.08,0xb02a22,CX,y0+2.2,SZ1-.14,{emissive:0x400000}));       // 인터록
+    pipe(8,[V(CX+.16,y0+2.2,SZ1-.14),V(SX0+.18,y0+2.2,SZ1-.14)],COL.safe,.015);
+    reg(8,box(.12,.24,.04,0x3a3f45,CX+.95,y0+1.1,SZ1+.12));                       // 승강장 버튼
+    reg(8,box(.4,.12,.04,0x23272a,CX,y0+2.3,SZ1+.12,{emissive:0x222222}));        // 층 표시기
+    LD.push(panels);
+  }
+  cable(8,[V(SX0+.18,2.2,SZ1-.14),V(SX0+.18,MRF+.12,SZ1-.14),V(-3.4,MRF+.12,SZ1-.14),V(-3.4,MRF+.12,-1.9),V(-3.4,MRF+.8,-1.9),V(-3.25,MRF+.8,-1.9)],COL.safe,.035,1.6);
+  anchors[8]=V(CX,FH+2.6,SZ1+.1);
+
+  // ── 9. 피트: 완충기 · 리밋 스위치 · 사다리 · 정지 스위치 · 침수 ──
+  function buffer(x,z){
+    reg(9,cyl(.25,.25,.12,0x3a3f45,x,PIT+.06,z,18));
+    reg(9,cyl(.15,.15,.5,0xc0392b,x,PIT+.37,z,14));
+    reg(9,cyl(.2,.2,.08,0x23272a,x,PIT+.66,z,16));
+  }
+  buffer(CX,0); buffer(WX,0);
+  [[-.25,0x2f8fe0],[-.6,0xc0392b],[HT-.4,0x2f8fe0],[HT-.05,0xc0392b]].forEach(([y,c])=>{
+    reg(9,box(.14,.24,.1,c,-.6,y,SZ0+.07)); reg(9,box(.03,.18,.12,0x23272a,-.6,y,SZ0+.18));});
+  [1.25,1.6].forEach(x=>reg(9,box(.04,1.9,.04,0xd8a51e,x,PIT+.95,SZ1-.06)));
+  for(let y=PIT+.3;y<.2;y+=.3) reg(9,box(.35,.03,.03,0xd8a51e,1.425,y,SZ1-.06));
+  reg(9,box(.18,.24,.08,0xf2c230,.95,-.3,SZ1-.05)); reg(9,cyl(.05,.05,.04,0xd0281e,.95,-.3,SZ1-.1,12).rotateX(Math.PI/2));
+  const water=mesh(new THREE.BoxGeometry(SX1-SX0-.04,.05,SZ1-SZ0-.04),glass(0x2a9fd0,.45),(SX0+SX1)/2,PIT+.03,(SZ0+SZ1)/2); water.renderOrder=1; reg(9,water);
+  anchors[9]=V(CX,PIT+1.1,.3);
+
+  // ── 10. ARD(기계실 배터리) · 관리사무소 인터폰 ──
+  reg(10,box(.7,1.1,.5,0x5b5f68,-3.2,MRF+.55,1.9));
+  reg(10,box(.5,.3,.04,0x23272a,-3.2,MRF+.8,2.17));
+  [-.15,.15].forEach(x=>reg(10,box(.18,.12,.02,0x2fb05f,-3.2+x,MRF+.8,2.2,{emissive:0x1f7a44})));
+  cable(10,[V(-3.2,MRF+1.1,1.9),V(-3.2,28.05,1.9),V(-3.0,28.05,1.9),V(-3.0,28.05,-2.3),V(-3.0,MRF+2.32,-2.3)],COL.pwr,.05,1.4);
+  anchors[10]=V(-3.2,MRF+1.5,1.9);
+
+  // ── 11. 원격감시 단말 → 관리사무소 감시 화면 ──
+  reg(11,box(.5,.6,.2,0x3c3550,3.0,26.9,-2.88));
+  reg(11,box(.3,.1,.02,0x9b8cff,3.0,27.05,-2.77,{emissive:0x4a3aa8}));
+  cable(11,[V(-2.0,MRF+2.32,-1.9),V(-2.0,28.5,-1.9),V(3.0,28.5,-1.9),V(3.0,28.5,-2.85),V(3.0,27.2,-2.85)],COL.ctl,.045,1.6);
+  cable(11,[V(3.0,26.6,-2.85),V(3.0,26.3,-2.85),V(4.1,26.3,-2.85),V(4.1,24.15,-2.85),V(8.3,24.15,-2.85),V(8.3,-.4,-2.85),V(8.3,-.4,7),V(13.8,-.4,7),V(13.8,.1,7)],COL.ctl,.05,2.6);
+  const office=mesh(new THREE.BoxGeometry(4,2.6,3),glass(0xd5d8de,.12),13,1.3,7); office.renderOrder=6; scene.add(office); edges(office,.6);
+  scene.add(box(4,.1,3,0x9a9ea6,13,.05,7));
+  reg(11,box(1.8,.75,.7,0x8a7f70,13,.45,7.6));
+  reg(11,box(.9,.55,.06,0x23272a,13.2,1.1,7.45));
+  reg(11,box(.8,.45,.02,0x6c5ad6,13.2,1.1,7.41,{emissive:0x2d2470}));
+  reg(10,box(.3,.2,.2,0xe9e6dc,12.4,.92,7.6));                   // 인터폰 주장치
+  reg(12,box(.3,.04,.22,0x2f5f8a,13.9,.84,7.7));                 // 점검 기록부
+  anchors[11]=V(13.2,1.8,7.4);
+
+  // ── 12. 법정 관리: 1층 승강장 게시물(검사합격증명·비상연락처) ──
+  reg(12,box(.42,.56,.03,0xf4f4ef,CX+1.6,1.5,SZ1+.115));
+  reg(12,box(.34,.1,.01,0x2f5f8a,CX+1.6,1.68,SZ1+.135));
+  [1.5,1.4,1.32].forEach(y=>reg(12,box(.3,.03,.01,0x8a8f99,CX+1.6,y,SZ1+.135)));
+  anchors[12]=V(CX+1.6,2.0,SZ1+.2);
+
+  // 13. 갇힘(카 따라 움직임) — 앵커는 루프에서 갱신
+  anchors[4]=V(WX,13,0); anchors[6]=V(); anchors[7]=V(); anchors[13]=V();
+
+  // 하이라이트 링
+  const ring=mesh(new THREE.RingGeometry(.9,1.05,40),new THREE.MeshBasicMaterial({color:0xffffff,transparent:true,opacity:.9,side:THREE.DoubleSide,depthTest:false}));
+  ring.renderOrder=20; scene.add(ring);
+
+  // 카 운행: 단계별 정지 위치(카 바닥 높이)
+  const PARK={6:2*FH,7:0,8:5*FH,9:3*FH,10:(NF-1)*FH,13:4*FH+1.2};
+  const TOP=(NF-1)*FH;
+  let yc=0, goal=TOP, wait=0, doorA=0;
+
+  // 카메라 시점
+  const VIEWS={
+    0:[V(32,24,50),V(-2,13,0)],
+    1:[V(-24,8,13),V(-12.5,3,-2.4)],
+    2:[V(2.5,29.6,6),V(-2.3,26.6,-1.7)],
+    3:[V(6.5,29.8,6.5),V(.4,26.5,-.6)],
+    4:[V(28,17,38),V(.5,13,0)],
+    5:[V(-6.5,28.6,6.5),V(-1.6,26.0,.6)],
+    6:[V(-7,5.6,3),V(-.8,4.4,0)],
+    7:[V(-.8,2.6,8.5),V(-.4,1.2,.6)],
+    8:[V(3,5.4,7.5),V(-.4,3.6,1.4)],
+    9:[V(-4.5,1.6,6),V(0,-.9,0)],
+    10:[V(-9.5,28,12),V(-1.6,24.6,.4)],
+    11:[V(32,18,34),V(6,11,1)],
+    12:[V(3.4,2.3,7.6),V(.6,1.4,1.4)],
+    13:[V(-7,13.5,10),V(-.4,11.4,.3)]
+  };
+  const UNDER={1:1,9:1,11:1};
+  let tween=null, sel=1, groundTarget=.9, hoverStep=0;
+
+  function fit(p,t){const asp=view.clientWidth/Math.max(1,view.clientHeight);const k=asp<1?1.55:asp<1.3?1.2:1;return t.clone().add(p.clone().sub(t).multiplyScalar(k));}
+  function flyTo(i,instant){const [p,t]=VIEWS[i];const pp=fit(p,t);
+    if(REDUCE||instant){camera.position.copy(pp);controls.target.copy(t);controls.update();tween=null;return;}
+    tween={p0:camera.position.clone(),t0:controls.target.clone(),p1:pp,t1:t.clone(),s:performance.now(),d:1500};}
+
+  // 하이라이트 재질
+  function paint(){
+    for(let i=1;i<=N;i++){
+      stepMeshes[i].forEach(o=>{ if(!o.material.emissive) return;
+        if(o.userData.baseE===undefined) o.userData.baseE=o.material.emissive.getHex();
+        if(i===sel){o.material.emissive.setHex(0xffb15c);o.userData.hl=true;}
+        else {o.material.emissive.setHex(o.userData.baseE);o.material.emissiveIntensity=1;o.userData.hl=false;}
+      });
+    }
+  }
+
+  // HTML 이름표
+  const tags={};
+  STEPS.forEach(s=>{const b=document.createElement("button");b.type="button";b.className="tag";b.dataset.n=s.n;
+    b.style.setProperty("--c",ZONE[s.z].c);b.innerHTML=`<i>${s.n}</i><span>${s.tag}</span><em>${s.t===s.tag?"":s.t}</em>`;
+    b.setAttribute("aria-label",s.n+"단계 "+s.t);
+    b.onclick=()=>{stopTour();select(s.n);};labelsEl.appendChild(b);tags[s.n]=b;});
+  STEPS.forEach(s=>{const e=tags[s.n].querySelector("em"); if(s.t===s.tag) e.remove();});
+
+  // 테마
+  function theme(){
+    const cs=getComputedStyle(document.documentElement), g=k=>cs.getPropertyValue(k).trim()||"#888";
+    const bg=new THREE.Color(g("--scene-bg"));
+    scene.background=bg; scene.fog=new THREE.Fog(bg,120,300);
+    groundMat.color.set(g("--scene-ground"));
+    const ln=new THREE.Color(g("--scene-line")); edgeMats.forEach(m=>m.color.copy(ln));
+    ring.material.color.set(g("--focus"));
+  }
+  theme();
+  matchMedia("(prefers-color-scheme: dark)").addEventListener("change",theme);
+  new MutationObserver(theme).observe(document.documentElement,{attributes:true,attributeFilter:["data-theme","style","class"]});
+
+  // 크기
+  function resize(){const w=view.clientWidth,h=view.clientHeight;renderer.setSize(w,h,false);camera.aspect=w/h;camera.updateProjectionMatrix();}
+  new ResizeObserver(resize).observe(view); resize();
+
+  // 클릭/호버
+  const ray=new THREE.Raycaster(), mv=new THREE.Vector2(); let down=null;
+  function hit(e){const r=canvas.getBoundingClientRect();mv.set(((e.clientX-r.left)/r.width)*2-1,-((e.clientY-r.top)/r.height)*2+1);ray.setFromCamera(mv,camera);
+    const h=ray.intersectObjects(pickables,false).find(x=>x.object.visible);return h?h.object.userData.step:0;}
+  canvas.addEventListener("pointerdown",e=>{down=[e.clientX,e.clientY];stopTour();tween=null;});
+  canvas.addEventListener("pointerup",e=>{if(down&&Math.hypot(e.clientX-down[0],e.clientY-down[1])<6){const s=hit(e);if(s)select(s);}down=null;});
+  let lastHover=0;
+  canvas.addEventListener("pointermove",e=>{if(e.buttons||e.pointerType!=="mouse")return;const now=performance.now();if(now-lastHover<60)return;lastHover=now;
+    hoverStep=hit(e);canvas.style.cursor=hoverStep?"pointer":"grab";});
+
+  // 카·균형추 위치 반영 (1:1 로핑: 카가 오르면 균형추는 같은 만큼 내려감)
+  function placeCar(){
+    carG.position.set(CX,yc,0);
+    const ycw=TOP-yc+.4; cwG.position.set(WX,ycw,0);
+    ropes.forEach(r=>{const y0=r.car?yc+2.99:ycw+2.6, y1=SHV.y; r.m.position.y=(y0+y1)/2; r.m.scale.y=y1-y0;});
+    anchors[6].set(CX-1.13,yc-.1,.4); anchors[7].set(CX,yc+2.85,1.1); anchors[13].set(CX,yc+1.5,.3);
+    anchors[4].set(WX,ycw+2.9,0);
+  }
+  function updateCar(dt){
+    const park=PARK[sel];
+    if(REDUCE){ yc = park!==undefined?park:4*FH; }
+    else if(doorA<.03){
+      const tgt = park!==undefined ? park : goal, d=tgt-yc;
+      if(Math.abs(d)<.004){ yc=tgt; }
+      else { const v=Math.min(1.8, Math.abs(d)*1.1+.12); yc+=Math.sign(d)*Math.min(Math.abs(d),v*dt); }
+    }
+    const atRest = Math.abs(yc-(park!==undefined?park:goal))<.004;
+    const fl = Math.round(yc/FH), atFloor = Math.abs(yc-fl*FH)<.004;
+    let open=0;
+    if(park===undefined && atRest){ wait+=dt; if(wait>.4&&wait<2.6) open=1; if(wait>4.2){wait=0;goal=goal>1?0:TOP;} }
+    else if(park===undefined) wait=0;
+    if(sel===7 && atFloor && atRest) open=1;
+    doorA = REDUCE ? open : doorA+(open-doorA)*Math.min(1,dt*2.6);
+    if(doorA<.001) doorA=0;
+    carDoor.forEach((d,i)=>{const s=i?1:-1; d.position.x=s*(.27+.54*doorA);});
+    beams.visible = sel===7 && doorA>.6;
+    LD.forEach((p,f)=>{const a=(atFloor&&f===fl)?doorA:0; p.forEach((d,i)=>{const s=i?1:-1; d.position.x=CX+s*(.28+.54*a);});});
+    placeCar();
+  }
+  { const p=PARK[1]; yc=p!==undefined?p:0; placeCar(); }
+
+  // 루프
+  const tmp=new THREE.Vector3(); let last=performance.now();
+  function loop(now){
+    const dt=Math.min(.05,(now-last)/1000); last=now;
+    if(tween){let k=Math.min(1,(now-tween.s)/tween.d);k=k<.5?4*k*k*k:1-Math.pow(-2*k+2,3)/2;
+      camera.position.lerpVectors(tween.p0,tween.p1,k);controls.target.lerpVectors(tween.t0,tween.t1,k);if(k>=1)tween=null;}
+    controls.update();
+    updateCar(dt);
+    // 전기·신호 흐름
+    const t=now/1000;
+    flows.forEach(f=>{const u=REDUCE?f.off:((f.off+t*f.speed/f.len)%1);f.c.getPointAt(u,f.s.position);});
+    // 함 문 열림
+    doors.forEach(d=>{const target=d.step===sel?-1.9:0;d.a+=(target-d.a)*Math.min(1,dt*5);d.pivot.rotation.y=d.a;});
+    // 지면 투명도
+    groundTarget=UNDER[sel]?.25:.9; groundMat.opacity+=(groundTarget-groundMat.opacity)*Math.min(1,dt*4);
+    // 하이라이트 펄스
+    const pulse=REDUCE?.35:.22+.18*Math.sin(t*3.2);
+    stepMeshes[sel].forEach(o=>{if(o.userData.hl)o.material.emissiveIntensity=pulse;});
+    // 링
+    ring.position.copy(anchors[sel]); ring.quaternion.copy(camera.quaternion);
+    const sc=camera.position.distanceTo(ring.position)*.045*(REDUCE?1:1+.12*Math.sin(t*3.2)); ring.scale.setScalar(sc);
+    renderer.render(scene,camera);
+    // 이름표
+    const w=view.clientWidth,h=view.clientHeight, show=$("#btnTags").getAttribute("aria-pressed")==="true";
+    for(let i=1;i<=N;i++){const el=tags[i];tmp.copy(anchors[i]).project(camera);
+      const vis=tmp.z<1&&tmp.x>-1.1&&tmp.x<1.1&&tmp.y>-1.1&&tmp.y<1.1&&(show||i===sel);
+      if(!vis){el.hidden=true;continue;} el.hidden=false;
+      const yo = i===sel? -26 : -16;
+      el.style.transform=`translate(${(tmp.x*.5+.5)*w}px,${(-tmp.y*.5+.5)*h+yo}px) translate(-50%,-50%)`;
+      el.classList.toggle("dim",i!==sel&&i!==hoverStep&&tmp.z>.995);}
+    requestAnimationFrame(loop);
+  }
+
+  return {
+    focus(n,o){sel=n;paint();flyTo(n,o&&o.instant);if(o&&o.instant){const p=PARK[n];if(p!==undefined){yc=p;placeCar();}}},
+    overview(instant){flyTo(0,instant);},
+    start(){requestAnimationFrame(loop);}
+  };
+}
+
+// ───────── 시작 ─────────
+try{ three=init3D(); }catch(e){
+  three=null;
+  const d=document.createElement("div");d.className="nogl";
+  d.innerHTML="<p>이 브라우저에서는 3D 모형을 불러오지 못했습니다.<br>오른쪽 설명과 아래 승강기 계통도로 같은 내용을 따라갈 수 있습니다.</p>";
+  view.appendChild(d); canvas.hidden=true; document.querySelector(".tools").hidden=true; document.querySelector(".hint").hidden=true;
+}
+const m=/^#s(\d{1,2})$/.exec(location.hash||""); const first=m&&+m[1]>=1&&+m[1]<=N?+m[1]:1;
+if(three){ three.focus(first,{instant:true}); if(!m) three.overview(true); three.start(); }
+cur=first; renderPanel();
+
+$("#btnAll").onclick=()=>{stopTour(); if(three) three.overview();};
+$("#btnTags").onclick=e=>{const b=e.currentTarget;b.setAttribute("aria-pressed",b.getAttribute("aria-pressed")==="true"?"false":"true");};
+$("#btnTour").onclick=e=>{
+  if(tour){stopTour();return;}
+  const b=e.currentTarget;b.setAttribute("aria-pressed","true");b.textContent="투어 멈춤";
+  select(cur===N?1:cur);
+  tour=setInterval(()=>{ if(cur>=N){stopTour();return;} select(cur+1); },7000);
+};
+window.addEventListener("hashchange",()=>{const k=/^#s(\d{1,2})$/.exec(location.hash);if(k&&+k[1]!==cur&&+k[1]>=1&&+k[1]<=N)select(+k[1]);});
+})();
+</script>
