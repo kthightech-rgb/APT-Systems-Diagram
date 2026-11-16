@@ -1,3 +1,17 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="description" content="수전·급수·소방·난방급탕·오수배수·승강기·홈네트워크·주차장 환기와 EV 충전, 8편 102단계를 3D로 따라가는 공동주택 설비 교육자료 (래온)">
+<meta property="og:type" content="website">
+<meta property="og:title" content="공동주택 설비계통 이해하기 · 래온">
+<meta property="og:description" content="8편 · 102단계 · 3D로 따라가는 공동주택 설비 흐름">
+<meta property="og:url" content="https://kthightech-rgb.github.io/APT-Systems-Diagram/">
+<meta property="og:image" content="https://kthightech-rgb.github.io/APT-Systems-Diagram/og.png">
+<meta property="og:image:width" content="1200">
+<meta property="og:image:height" content="630">
+<meta property="og:locale" content="ko_KR">
 <title>공동주택 설비계통 이해하기</title>
 <meta name="claude:viewport-fit-sides" content="cover">
 <link rel="preconnect" href="https://fonts.googleapis.com">
@@ -136,3 +150,16 @@ const L=[
 document.getElementById("links").innerHTML=L.map(r=>`<tr><td>${r[0]}</td><td>${r[1]}</td><td><div class="chips">${r[2].map(n=>`<a class="chip" style="--c:var(--c${n})" href="${P[n-1].f}">${n}. ${P[n-1].t}</a>`).join("")}</div></td></tr>`).join("");
 })();
 </script>
+
+<!-- 래온 이용 안내 (2026-11-16) -->
+<footer id="raeon-legal" style="max-width:1100px;margin:28px auto 96px;padding:16px 20px;border:1px solid #cfd5dc;border-radius:10px;background:#f7f8fa;color:#3a4148;font:15px/1.65 'Apple SD Gothic Neo','Malgun Gothic',sans-serif;box-sizing:border-box;text-align:left">
+<div style="font-weight:700;font-size:16px;color:#1c2326;margin-bottom:4px">ⓘ 이용 안내</div>
+<ul style="margin:0;padding-left:20px"><li style="margin:2px 0">이 사이트는 래온(來On)이 만든 무료 교육자료이며, 국토교통부·K-apt·주택관리사협회의 공식 자료가 아닙니다.</li><li style="margin:2px 0">설비의 일반 원리를 설명하는 참고자료입니다. 실제 단지의 설비 구성·법정 기준은 준공도면·관련 법령으로 확인하세요.</li><li style="margin:2px 0">입력한 내용·파일·인증키는 이 브라우저에만 저장되며 제작자에게 전송되지 않습니다. 화면 구성용 라이브러리를 외부(cdnjs·jsDelivr·Google Fonts)에서 불러오므로 접속 기록은 GitHub와 해당 CDN에 남을 수 있습니다.</li></ul>
+<details style="margin-top:8px"><summary style="cursor:pointer;font-weight:700;color:#1f4f82">출처 · 오픈소스 · 이용 허락 보기</summary>
+<div style="margin-top:6px"><b>출처</b><ul style="margin:2px 0 8px;padding-left:20px"><li>내용: 래온(來On)이 작성한 설비 일반 원리 교육자료(특정 제품·업체 자료 아님)</li></ul>
+<b>오픈소스</b><ul style="margin:2px 0 8px;padding-left:20px"><li>three.js r128 · OrbitControls : MIT</li><li>IBM Plex Sans KR · IBM Plex Mono 글꼴 : SIL Open Font License 1.1 (Google Fonts)</li></ul>
+<b>이용 허락</b><div style="margin:2px 0 0 4px">누구나 무료로 사용하고 링크를 공유할 수 있으며, 앱으로 만든 결과물은 사용자의 것입니다. 소스코드·화면 구성을 허락 없이 수정·재배포하거나 영리 목적으로 쓰는 것은 허용되지 않습니다. 전문: <a href="https://github.com/kthightech-rgb/APT-Systems-Diagram/blob/main/LICENSE" target="_blank" rel="noopener">LICENSE</a></div></div></details>
+<div style="margin-top:8px;font-size:13px;color:#6a737c">© 2026 래온(來On) · 공동주택 설비계통 이해하기</div>
+</footer>
+</body>
+</html>
